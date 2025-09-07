@@ -1,0 +1,43 @@
+[package]
+name = "launchdock"
+version = "0.1.0"
+edition = "2024"
+description = "Cross-platform application launcher daemon"
+authors = ["QA3 Technologies <contact@qa3.tech>"]
+license = "MIT"
+
+[[bin]]
+name = "launchdock"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+global-hotkey = "0.5"
+iced = { version = "0.13.1", features = ["tokio", "advanced"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Platform-specific dependencies
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "processthreadsapi",
+    "winnt",
+    "handleapi",
+    "shellapi",
+    "winuser"
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
