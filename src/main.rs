@@ -1,4 +1,6 @@
 use clap::{Parser, Subcommand};
+use std::process;
+
 mod daemon;
 mod logs;
 mod model;
@@ -24,63 +26,87 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logger first
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     logs::init_logger()?;
-
-    use daemon::{Message, Response, is_running, run_daemon, send_message};
-
-    match (Cli::parse().command, is_running()) {
-        (Commands::Start, false) => {
-            logs::log_info("Starting LaunchDock daemon...");
-            println!("Starting LaunchDock daemon...");
-            run_daemon().await?;
-        }
-        (Commands::Start, true) => {
-            logs::log_info("LaunchDock start requested but already running");
-            println!("LaunchDock is already running");
-        }
-        (Commands::Stop, true) => {
-            send_message(Message::Stop).await?;
-            logs::log_info("LaunchDock stopped");
-            println!("LaunchDock stopped");
-        }
-        (Commands::Show, true) => {
-            send_message(Message::Show).await?;
-            logs::log_info("Launcher shown");
-            println!("Launcher shown");
-        }
-        (Commands::Hide, true) => {
-            send_message(Message::Hide).await?;
-            logs::log_info("Launcher hidden");
-            println!("Launcher hidden");
-        }
-        (Commands::Status, true) => match send_message(Message::Status).await? {
-            Response::Status {
-                running,
-                ui_visible,
-            } => {
-                logs::log_info(&format!(
-                    "Status checked - Daemon: {}, UI: {}",
-                    if running { "Running" } else { "Stopped" },
-                    if ui_visible { "Visible" } else { "Hidden" }
-                ));
-                println!("Daemon: {}", if running { "Running" } else { "Stopped" });
-                println!("UI: {}", if ui_visible { "Visible" } else { "Hidden" });
-            }
-            _ => {
-                logs::log_error("Status request returned unknown response");
-                println!("Status unknown");
-            }
-        },
-        (Commands::Logs { action }, _) => {
+    
+    let cli = Cli::parse();
+    
+    match cli.command {
+        Commands::Start => handle_start(),
+        Commands::Stop => send_daemon_command(daemon::DaemonCommand::Stop),
+        Commands::Show => send_daemon_command(daemon::DaemonCommand::Show),
+        Commands::Hide => send_daemon_command(daemon::DaemonCommand::Hide),
+        Commands::Status => send_daemon_command(daemon::DaemonCommand::Status),
+        Commands::Logs { action } => {
             logs::handle_logs_command(action)?;
-        }
-        (_, false) => {
-            logs::log_error("Command attempted but LaunchDock is not running");
-            println!("LaunchDock is not running. Use 'launchdock start' to start it.");
+            Ok(())
         }
     }
+}
+
+fn handle_start() -> Result<(), Box<dyn std::error::Error>> {
+    // Check if we're the daemon process (spawned with null stdio)
+    if is_daemon_process() {
+        // We ARE the daemon - run it directly
+        return daemon::run_daemon();
+    }
+    
+    // Check if daemon is already running
+    if daemon::is_running() {
+        println!("LaunchDock is already running");
+        return Ok(());
+    }
+    
+    println!("Starting LaunchDock daemon...");
+    
+    // Spawn daemon as separate process
+    let exe = std::env::current_exe()?;
+    let child = process::Command::new(exe)
+        .arg("start")
+        .stdin(process::Stdio::null())
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .spawn()?;
+    
+    println!("Daemon started with PID: {}", child.id());
     Ok(())
+}
+
+fn send_daemon_command(cmd: daemon::DaemonCommand) -> Result<(), Box<dyn std::error::Error>> {
+    if !daemon::is_running() {
+        println!("LaunchDock is not running. Use 'launchdock start' to start it.");
+        return Ok(());
+    }
+    
+    // Create a temporary runtime for async operations
+    let rt = tokio::runtime::Runtime::new()?;
+    let response = rt.block_on(daemon::send_command(cmd))?;
+    
+    match response {
+        daemon::DaemonResponse::Ok => {
+            // Command acknowledged
+        }
+        daemon::DaemonResponse::Status { running, visible } => {
+            println!("Daemon: {}", if running { "Running" } else { "Stopped" });
+            println!("UI: {}", if visible { "Visible" } else { "Hidden" });
+        }
+    }
+    
+    Ok(())
+}
+
+fn is_daemon_process() -> bool {
+    // Check if we're running with null stdio (daemon mode)
+    #[cfg(unix)]
+    {
+        // Check if stdin is a terminal
+        unsafe { libc::isatty(0) == 0 }
+    }
+    
+    #[cfg(windows)]
+    {
+        // On Windows, check if we have a console window
+        use winapi::um::wincon::GetConsoleWindow;
+        unsafe { GetConsoleWindow().is_null() }
+    }
 }

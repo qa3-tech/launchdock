@@ -1,13 +1,8 @@
-use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager,
-    hotkey::{Code, HotKey, Modifiers},
-};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process};
+use std::{fs, path::PathBuf, process, sync::mpsc, thread};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
-    sync::mpsc,
 };
 
 use crate::{
@@ -17,7 +12,7 @@ use crate::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum Message {
+pub enum DaemonCommand {
     Show,
     Hide,
     Stop,
@@ -25,9 +20,16 @@ pub enum Message {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Response {
+pub enum DaemonResponse {
     Ok,
-    Status { running: bool, ui_visible: bool },
+    Status { running: bool, visible: bool },
+}
+
+#[derive(Debug)]
+enum InternalEvent {
+    ShowUi(AppModel),
+    UiClosed,
+    Shutdown,
 }
 
 fn config_dir() -> PathBuf {
@@ -48,11 +50,11 @@ fn config_dir() -> PathBuf {
 }
 
 fn socket_path() -> PathBuf {
-    config_dir().join("daemon.sock")
+    config_dir().join("launchdockd.sock")
 }
 
 fn pid_file() -> PathBuf {
-    config_dir().join("daemon.pid")
+    config_dir().join("launchdockd.pid")
 }
 
 pub fn is_running() -> bool {
@@ -89,9 +91,9 @@ fn is_process_running(pid: u32) -> bool {
     }
 }
 
-pub async fn send_message(msg: Message) -> Result<Response, Box<dyn std::error::Error>> {
+pub async fn send_command(cmd: DaemonCommand) -> Result<DaemonResponse, Box<dyn std::error::Error>> {
     let mut stream = UnixStream::connect(socket_path()).await?;
-    let data = serde_json::to_vec(&msg)?;
+    let data = serde_json::to_vec(&cmd)?;
 
     stream.write_all(&data).await?;
     stream.shutdown().await?;
@@ -99,139 +101,146 @@ pub async fn send_message(msg: Message) -> Result<Response, Box<dyn std::error::
     let mut buffer = Vec::new();
     stream.read_to_end(&mut buffer).await?;
 
-    let response: Response = serde_json::from_slice(&buffer)?;
+    let response: DaemonResponse = serde_json::from_slice(&buffer)?;
     Ok(response)
 }
 
-pub async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
-    // Create config directory
+pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(config_dir())?;
-
-    // Remove existing socket if it exists
-    let _ = fs::remove_file(socket_path());
-
-    // Bind to Unix socket
-    let listener = UnixListener::bind(socket_path())?;
-
-    // Write PID file
     fs::write(pid_file(), process::id().to_string())?;
+    
+    let (to_main_tx, to_main_rx) = mpsc::channel::<InternalEvent>();
+    let (from_main_tx, from_main_rx) = mpsc::channel::<InternalEvent>();
+    
+    thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        
+        rt.block_on(async {
+            if let Err(e) = async_task_loop(to_main_tx, from_main_rx).await {
+                logs::log_error(&format!("Async task error: {}", e));
+            }
+        });
+    });
+    
+    logs::log_info(&format!("LaunchDock daemon started (PID: {})", process::id()));
+    
+    for event in to_main_rx {
+        match event {
+            InternalEvent::ShowUi(model) => {
+                logs::log_info("Showing UI on main thread");
+                
+                if let Err(e) = run_ui(model) {
+                    logs::log_error(&format!("UI error: {}", e));
+                }
+                
+                // UI has closed, notify async thread
+                let _ = from_main_tx.send(InternalEvent::UiClosed);
+            }
+            InternalEvent::Shutdown => {
+                logs::log_info("Shutdown received");
+                break;
+            }
+            _ => {}
+        }
+    }
+    
+    cleanup();
+    Ok(())
+}
 
-    // Initialize app model
+async fn async_task_loop(
+    to_main: mpsc::Sender<InternalEvent>,
+    from_main: mpsc::Receiver<InternalEvent>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = fs::remove_file(socket_path());
+    let listener = UnixListener::bind(socket_path())?;
+    
     let mut model = AppModel {
         all_apps: discover_apps(),
+        ui_visible: false,
         ..Default::default()
     };
-    let mut ui_visible = false;
-
-    // Setup global hotkey
-    let manager = GlobalHotKeyManager::new()?;
-    let hotkey = HotKey::new(Some(Modifiers::META), Code::Escape);
-    manager.register(hotkey)?;
-
-    let (hotkey_tx, mut hotkey_rx) = mpsc::channel::<Message>(10);
-
-    // Spawn hotkey monitoring task
-    tokio::spawn(async move {
-        let receiver = GlobalHotKeyEvent::receiver();
-        loop {
-            match receiver.try_recv() {
-                Ok(_) => {
-                    if hotkey_tx.send(Message::Show).await.is_err() {
-                        break;
-                    }
-                }
-                Err(_) => {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                }
-            }
-        }
-    });
-
-    logs::log_info("LaunchDock daemon started");
-    logs::log_info(&format!("PID: {}", process::id()));
+    
+    logs::log_info("Daemon ready");
     logs::log_info(&format!("Socket: {:?}", socket_path()));
-    logs::log_info("Hotkey: Meta+Escape");
-
+    
     loop {
         tokio::select! {
-            // Handle client connections
             result = listener.accept() => {
-                match result {
-                    Ok((mut stream, _)) => {
-                        let mut buffer = vec![0; 1024];
-                        if let Ok(n) = stream.read(&mut buffer).await {
-                            if let Ok(msg) = serde_json::from_slice::<Message>(&buffer[..n]) {
-                                let response = match msg {
-                                    Message::Show => {
-                                        if !ui_visible {
-                                            ui_visible = true;
-                                            model.search_query.clear();
-                                            model.selected_index = 0;
-
-                                            logs::log_info("Client request: showing launcher");
-                                            let model_clone = model.clone();
-                                            tokio::spawn(async move {
-                                                if let Err(e) = run_ui(model_clone) {
-                                                    logs::log_error(&format!("UI error: {}", e));
-                                                }
-                                            });
-                                        }
-                                        Response::Ok
-                                    }
-                                    Message::Hide => {
-                                        ui_visible = false;
-                                        logs::log_info("Client request: hiding launcher");
-                                        Response::Ok
-                                    }
-                                    Message::Status => {
-                                        logs::log_info("Client request: status check");
-                                        Response::Status { running: true, ui_visible }
-                                    }
-                                    Message::Stop => {
-                                        logs::log_info("Client request: stopping daemon");
-                                        cleanup().await;
-                                        return Ok(());
-                                    }
-                                };
-
-                                let response_data = serde_json::to_vec(&response).unwrap_or_default();
-                                let _ = stream.write_all(&response_data).await;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        logs::log_error(&format!("Error accepting connection: {}", e));
+                if let Ok((mut stream, _)) = result {
+                    if let Some(response) = handle_client_connection(&mut stream, &mut model, &to_main).await {
+                        let data = serde_json::to_vec(&response)?;
+                        let _ = stream.write_all(&data).await;
                     }
                 }
             }
-
-            // Handle hotkey events
-            Some(msg) = hotkey_rx.recv() => {
-                match msg {
-                    Message::Show => {
-                        if !ui_visible {
-                            ui_visible = true;
-                            model.search_query.clear();
-                            model.selected_index = 0;
-
-                            logs::log_info("Hotkey pressed - showing launcher");
-                            let model_clone = model.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = run_ui(model_clone) {
-                                    logs::log_error(&format!("UI error: {}", e));
-                                }
-                            });
+            
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                if let Ok(event) = from_main.try_recv() {
+                    match event {
+                        InternalEvent::UiClosed => {
+                            model.ui_visible = false;
+                            logs::log_info("UI closed");
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
     }
 }
 
-async fn cleanup() {
-    logs::log_info("Cleaning up daemon...");
+async fn handle_client_connection(
+    stream: &mut UnixStream,
+    model: &mut AppModel,
+    to_main: &mpsc::Sender<InternalEvent>,
+) -> Option<DaemonResponse> {
+    let mut buffer = vec![0; 1024];
+    let n = stream.read(&mut buffer).await.ok()?;
+    let cmd: DaemonCommand = serde_json::from_slice(&buffer[..n]).ok()?;
+    
+    let response = match cmd {
+        DaemonCommand::Show => {
+            if !model.ui_visible {
+                show_ui(model, to_main);
+            }
+            DaemonResponse::Ok
+        }
+        DaemonCommand::Hide => {
+            model.ui_visible = false;
+            logs::log_info("Hide requested");
+            DaemonResponse::Ok
+        }
+        DaemonCommand::Status => {
+            DaemonResponse::Status {
+                running: true,
+                visible: model.ui_visible,
+            }
+        }
+        DaemonCommand::Stop => {
+            logs::log_info("Stop requested");
+            let _ = to_main.send(InternalEvent::Shutdown);
+            DaemonResponse::Ok
+        }
+    };
+    
+    Some(response)
+}
+
+fn show_ui(model: &mut AppModel, to_main: &mpsc::Sender<InternalEvent>) {
+    model.ui_visible = true;
+    model.search_query.clear();
+    model.selected_index = 0;
+    
+    logs::log_info("Requesting UI show");
+    let _ = to_main.send(InternalEvent::ShowUi(model.clone()));
+}
+
+fn cleanup() {
+    logs::log_info("Cleaning up...");
     let _ = fs::remove_file(socket_path());
     let _ = fs::remove_file(pid_file());
 }

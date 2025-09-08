@@ -3,7 +3,6 @@ use std::{collections::HashSet, fs, path::PathBuf, process::Command};
 
 use crate::logs;
 
-// Comprehensive application paths
 const WINDOWS_APP_PATHS: &[&str] = &[
     "C:\\Program Files\\",
     "C:\\Program Files (x86)\\",
@@ -46,8 +45,8 @@ const LINUX_DESKTOP_ENTRY_PATHS: &[&str] = &[
 pub struct App {
     pub name: String,
     pub path: PathBuf,
-    pub description: Option<String>, // For desktop entries
-    pub icon: Option<String>,        // Icon path or name
+    pub description: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -55,6 +54,7 @@ pub struct AppModel {
     pub all_apps: Vec<App>,
     pub search_query: String,
     pub selected_index: usize,
+    pub ui_visible: bool,
 }
 
 impl AppModel {
@@ -82,26 +82,22 @@ pub fn discover_apps() -> Vec<App> {
     logs::log_info("Discovering applications...");
 
     let mut apps = Vec::new();
-    let mut seen_names = HashSet::new(); // Deduplicate by name
+    let mut seen_names = HashSet::new();
 
-    // Get all relevant paths for the current OS
     let paths = get_app_paths();
 
     for path in paths {
         let discovered = scan_directory(&path);
         for app in discovered {
-            // Deduplicate by name (keep first occurrence)
             if seen_names.insert(app.name.clone()) {
                 apps.push(app);
             }
         }
     }
 
-    // On Linux, prioritize desktop entries over raw executables
     if std::env::consts::OS == "linux" {
         let desktop_apps = discover_desktop_entries();
         for app in desktop_apps {
-            // Replace any existing app with same name, as desktop entries have better metadata
             if let Some(pos) = apps.iter().position(|a| a.name == app.name) {
                 apps[pos] = app;
             } else if seen_names.insert(app.name.clone()) {
@@ -127,14 +123,14 @@ fn get_app_paths() -> Vec<String> {
     paths
         .iter()
         .map(|path| path.replace("{username}", &username))
-        .filter(|path| PathBuf::from(path).exists()) // Only return existing paths
+        .filter(|path| PathBuf::from(path).exists())
         .collect()
 }
 
 fn get_username() -> String {
-    std::env::var("USERNAME") // Windows
-        .or_else(|_| std::env::var("USER")) // Unix-like
-        .or_else(|_| std::env::var("LOGNAME")) // Alternative Unix
+    std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
@@ -149,11 +145,12 @@ fn scan_directory(path: &str) -> Vec<App> {
 
             if is_app(&path) {
                 let name = get_app_name(&path);
+                let icon = get_app_icon(&path);
                 Some(App {
                     name,
                     path,
                     description: None,
-                    icon: None,
+                    icon,
                 })
             } else {
                 None
@@ -164,21 +161,88 @@ fn scan_directory(path: &str) -> Vec<App> {
 
 fn get_app_name(path: &PathBuf) -> String {
     match std::env::consts::OS {
-        "macos" => {
-            // For .app bundles, remove .app extension
-            path.file_stem()
-                .unwrap_or(path.as_os_str())
-                .to_string_lossy()
-                .to_string()
-        }
-        _ => {
-            // For other platforms, use file stem
-            path.file_stem()
-                .unwrap_or(path.as_os_str())
-                .to_string_lossy()
-                .to_string()
+        "macos" => path
+            .file_stem()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy()
+            .to_string(),
+        _ => path
+            .file_stem()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy()
+            .to_string(),
+    }
+}
+
+fn get_app_icon(path: &PathBuf) -> Option<String> {
+    match std::env::consts::OS {
+        "macos" => get_macos_app_icon(path),
+        "windows" => get_windows_app_icon(path),
+        _ => None, // Linux icons are handled via desktop entries
+    }
+}
+
+fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
+    // Only process .app bundles
+    if app_path.extension()?.to_str()? != "app" {
+        return None;
+    }
+
+    // First, try the standard AppIcon.icns location
+    let standard_icon_path = app_path.join("Contents/Resources/AppIcon.icns");
+    if standard_icon_path.exists() {
+        return Some(standard_icon_path.to_string_lossy().to_string());
+    }
+
+    // Fallback: look for any .icns file in Resources directory
+    let resources_dir = app_path.join("Contents/Resources");
+    if let Ok(entries) = fs::read_dir(resources_dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("icns") {
+                return Some(path.to_string_lossy().to_string());
+            }
         }
     }
+
+    // Last resort: check Info.plist for CFBundleIconFile
+    let info_plist_path = app_path.join("Contents/Info.plist");
+    if info_plist_path.exists() {
+        if let Ok(content) = fs::read_to_string(&info_plist_path) {
+            // Simple string search for icon file (not a full plist parser)
+            if let Some(start) = content.find("<key>CFBundleIconFile</key>") {
+                if let Some(string_start) = content[start..].find("<string>") {
+                    let string_content_start = start + string_start + 8;
+                    if let Some(string_end) = content[string_content_start..].find("</string>") {
+                        let icon_name = &content[string_content_start..string_content_start + string_end];
+                        let icon_path = app_path.join("Contents/Resources").join(format!("{}.icns", icon_name.trim()));
+                        if icon_path.exists() {
+                            return Some(icon_path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn get_windows_app_icon(app_path: &PathBuf) -> Option<String> {
+    // For Windows applications, we don't extract embedded icons from .exe files
+    // since this requires complex Windows API calls to ExtractIconEx or similar.
+    // 
+    // Extracting icons would involve:
+    // 1. Loading the .exe/.dll as a resource
+    // 2. Calling ExtractIconEx to get icon handles
+    // 3. Converting icon handles to bitmap data
+    // 4. Saving as temporary .ico files that Iced can load
+    //
+    // For now, we return None and let the view handle missing icons gracefully
+    // without showing placeholder icons.
+    //
+    // Future enhancement: Implement proper icon extraction and caching
+    None
 }
 
 fn is_app(path: &PathBuf) -> bool {
@@ -195,10 +259,7 @@ fn is_app(path: &PathBuf) -> bool {
                 .unwrap_or(false)
                 || path.is_file() && is_executable(path)
         }
-        _ => {
-            // Linux - check if executable file
-            path.is_file() && is_executable(path)
-        }
+        _ => path.is_file() && is_executable(path),
     }
 }
 
@@ -212,7 +273,6 @@ fn is_executable(path: &PathBuf) -> bool {
     }
     #[cfg(not(unix))]
     {
-        // On non-Unix, assume files in bin directories are executable
         path.parent()
             .and_then(|p| p.file_name())
             .and_then(|name| name.to_str())
@@ -221,7 +281,6 @@ fn is_executable(path: &PathBuf) -> bool {
     }
 }
 
-// Linux-specific: Parse .desktop files for better app metadata
 fn discover_desktop_entries() -> Vec<App> {
     let username = get_username();
     let mut apps = Vec::new();
@@ -271,10 +330,8 @@ fn parse_desktop_entry(path: &PathBuf) -> Option<App> {
     let name = name?;
     let exec = exec?;
 
-    // Extract the executable path from the Exec line
     let exec_path = exec.split_whitespace().next()?.trim_matches('"');
 
-    // If it's not an absolute path, try to find it in PATH
     let executable_path = if exec_path.starts_with('/') {
         PathBuf::from(exec_path)
     } else {

@@ -1,192 +1,203 @@
 use iced::{
-    Alignment, Element, Length, Subscription, Task, keyboard,
-    widget::{button, column, container, text, text_input},
+    widget::{column, container, row, text, text_input, Column, Space},
+    keyboard, application, Alignment, Background, Border, Color, Element,
+    Length, Shadow, Subscription, Task, Theme,
 };
 
 use crate::model::{AppModel, launch_app};
 
-pub struct LauncherApp {
-    model: AppModel,
-}
-
 #[derive(Debug, Clone)]
 pub enum Message {
-    SearchChanged(String),
-    LaunchApp(usize),
-    LaunchSelected,
-    Navigate(i32),
-    Close,
+    InputChanged(String),
+    KeyPressed(keyboard::Key, keyboard::Modifiers),
 }
 
-impl LauncherApp {
-    fn new(model: AppModel) -> Self {
-        Self { model }
-    }
+pub fn run_ui(initial_model: AppModel) -> iced::Result {
+    application("Launchdock", update, view)
+        .subscription(subscription)
+        .theme(|_| Theme::Dark)
+        .run_with(|| (initial_model, Task::none()))
 }
 
-fn update(app: &mut LauncherApp, message: Message) -> Task<Message> {
+fn update(model: &mut AppModel, message: Message) -> Task<Message> {
     match message {
-        Message::SearchChanged(query) => {
-            app.model.search_query = query;
-            app.model.selected_index = 0;
+        Message::InputChanged(value) => {
+            model.search_query = value;
+            model.selected_index = 0;
         }
-        Message::LaunchApp(index) => {
-            let filtered = app.model.filtered_apps();
-            if let Some(app_item) = filtered.get(index) {
-                launch_app(app_item);
+        Message::KeyPressed(key, modifiers) => {
+            match key {
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                    let results = model.filtered_apps();
+                    if !results.is_empty() && model.selected_index < results.len() - 1 {
+                        model.selected_index += 1;
+                    }
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                    if model.selected_index > 0 {
+                        model.selected_index -= 1;
+                    }
+                }
+                keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                    let results = model.filtered_apps();
+                    if model.selected_index < results.len() {
+                        if let Some(app) = results.get(model.selected_index) {
+                            launch_app(app);
+                            model.search_query.clear();
+                            model.selected_index = 0;
+                        }
+                    }
+                }
+                keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                    model.search_query.clear();
+                    model.selected_index = 0;
+                }
+                keyboard::Key::Character(c) if modifiers.command() => {
+                    if let Ok(num) = c.parse::<usize>() {
+                        if num < 8 {
+                            let results = model.filtered_apps();
+                            if num < results.len() {
+                                if let Some(app) = results.get(num) {
+                                    launch_app(app);
+                                    model.search_query.clear();
+                                    model.selected_index = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
-        }
-        Message::LaunchSelected => {
-            let filtered = app.model.filtered_apps();
-            if let Some(app_item) = filtered.get(app.model.selected_index) {
-                launch_app(app_item);
-            }
-        }
-        Message::Navigate(delta) => {
-            let filtered = app.model.filtered_apps();
-            if !filtered.is_empty() {
-                let current = app.model.selected_index as i32;
-                let new_index = (current + delta).max(0) as usize;
-                app.model.selected_index = new_index.min(filtered.len() - 1);
-            }
-        }
-        Message::Close => {
-            std::process::exit(0);
         }
     }
     Task::none()
 }
 
-fn view(app: &LauncherApp) -> Element<'_, Message> {
-    // Platform-aware search placeholder
-    let search_placeholder = if std::env::consts::OS == "linux" {
-        "Search applications and descriptions..."
-    } else {
-        "Search applications..."
-    };
+fn view(model: &AppModel) -> Element<Message> {
+    let input = text_input("Search...", &model.search_query)
+        .on_input(Message::InputChanged)
+        .padding(16)
+        .size(18)
+        .style(|_theme: &Theme, _status| {
+            text_input::Style {
+                background: Background::Color(Color::BLACK),
+                border: Border {
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                    radius: 8.0.into(),
+                },
+                icon: Color::from_rgb(0.7, 0.7, 0.7),
+                placeholder: Color::from_rgb(0.5, 0.5, 0.5),
+                value: Color::WHITE,
+                selection: Color::from_rgb(0.3, 0.5, 0.8),
+            }
+        });
 
-    let search_input = text_input(search_placeholder, &app.model.search_query)
-        .on_input(Message::SearchChanged)
-        .padding(12)
-        .size(16)
-        .width(Length::Fill);
+    let mut content = Column::new()
+        .push(input)
+        .spacing(0);
 
-    let filtered_apps = app.model.filtered_apps();
-
-    if filtered_apps.is_empty() {
-        // Empty state handling
-        let content = if app.model.search_query.is_empty() {
-            column![
-                text("LaunchDock").size(24),
-                text("Type to search applications").size(14),
-            ]
-            .spacing(10)
-            .align_x(Alignment::Center)
-        } else {
-            column![
-                text("No applications found").size(16),
-                text(format!("No matches for \"{}\"", app.model.search_query)).size(12),
-            ]
-            .spacing(8)
-            .align_x(Alignment::Center)
-        };
-
-        container(
-            column![search_input, content]
-                .spacing(20)
-                .align_x(Alignment::Center),
+    let results = model.filtered_apps();
+    
+    if !results.is_empty() {
+        let result_elements = results
+            .iter()
+            .enumerate()
+            .map(|(index, app)| {
+                let icon = text("📦").size(24);
+                
+                let app_info = column![
+                    text(&app.name)
+                        .size(16)
+                        .color(Color::WHITE),
+                    text(app.description.as_deref().unwrap_or(""))
+                        .size(12)
+                        .color(Color::from_rgb(0.6, 0.6, 0.6))
+                ]
+                .spacing(2);
+                
+                let shortcut = text(format!("⌘{}", index))
+                    .size(14)
+                    .color(Color::from_rgb(0.5, 0.5, 0.5));
+                
+                let row_content = row![
+                    icon,
+                    Space::with_width(12),
+                    app_info,
+                    Space::with_width(Length::Fill),
+                    shortcut
+                ]
+                .align_y(Alignment::Center)
+                .padding(12);
+                
+                container(row_content)
+                    .width(Length::Fill)
+                    .style(move |_theme: &Theme| {
+                        container::Style {
+                            background: if index == model.selected_index {
+                                Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.15)))
+                            } else {
+                                Some(Background::Color(Color::BLACK))
+                            },
+                            border: Border::default(),
+                            shadow: Shadow::default(),
+                            text_color: Some(Color::WHITE),
+                        }
+                    })
+                    .into()
+            })
+            .collect::<Vec<Element<Message>>>();
+        
+        let results_container = container(
+            Column::with_children(result_elements)
+                .spacing(0)
         )
-        .padding(20)
+        .style(|_theme: &Theme| {
+            container::Style {
+                background: Some(Background::Color(Color::BLACK)),
+                border: Border {
+                    width: 1.0,
+                    color: Color::from_rgb(0.2, 0.2, 0.2),
+                    radius: 0.0.into(),
+                },
+                shadow: Shadow::default(),
+                text_color: Some(Color::WHITE),
+            }
+        });
+        
+        content = content.push(results_container);
+    }
+
+    let inner_container = container(content)
+        .padding(0)
+        .width(600)
+        .style(|_theme: &Theme| {
+            container::Style {
+                background: Some(Background::Color(Color::from_rgb(0.2, 0.2, 0.2))),
+                border: Border {
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                    radius: 12.0.into(),
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                    offset: iced::Vector::new(0.0, 4.0),
+                    blur_radius: 20.0,
+                },
+                text_color: Some(Color::WHITE),
+            }
+        });
+
+    container(inner_container)
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(Alignment::Center)
         .align_y(Alignment::Center)
         .into()
-    } else {
-        // Build app list
-        let mut app_list = column![];
-
-        for (index, app_item) in filtered_apps.iter().enumerate().take(8) {
-            let is_selected = index == app.model.selected_index;
-
-            // Create app info column with name and optional description
-            let mut app_content = column![text(&app_item.name).size(14)];
-
-            // Add description if available and different from name
-            if let Some(ref description) = app_item.description {
-                if !description.is_empty() && description != &app_item.name {
-                    app_content = app_content.push(text(description).size(11));
-                }
-            }
-
-            // Create button with iced 0.13.1 styling
-            let app_button = button(app_content)
-                .on_press(Message::LaunchApp(index))
-                .width(Length::Fill)
-                .padding(12);
-
-            // Apply styling using the correct 0.13.1 API
-            let styled_button = if is_selected {
-                app_button.style(button::primary)
-            } else {
-                app_button
-            };
-
-            app_list = app_list.push(styled_button);
-        }
-
-        app_list = app_list.spacing(4);
-
-        // Create status bar with result count and navigation hints
-        let status_text = if filtered_apps.len() > 8 {
-            format!(
-                "Showing 8 of {} results • ↑↓ navigate • Enter launch • Esc close",
-                filtered_apps.len()
-            )
-        } else {
-            let result_word = if filtered_apps.len() == 1 {
-                "result"
-            } else {
-                "results"
-            };
-            format!(
-                "{} {} • ↑↓ navigate • Enter launch • Esc close",
-                filtered_apps.len(),
-                result_word
-            )
-        };
-
-        let status_bar = text(status_text).size(10);
-
-        // Combine all elements
-        container(column![search_input, app_list, status_bar].spacing(12))
-            .padding(16)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
 }
 
-fn subscription(_app: &LauncherApp) -> Subscription<Message> {
-    keyboard::on_key_press(|key, _modifiers| match key {
-        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::Navigate(-1)),
-        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::Navigate(1)),
-        keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::LaunchSelected),
-        keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::Close),
-        _ => None,
+fn subscription(_model: &AppModel) -> Subscription<Message> {
+    keyboard::on_key_press(|key, modifiers| {
+        Some(Message::KeyPressed(key, modifiers))
     })
-}
-
-pub fn run_ui(model: AppModel) -> iced::Result {
-    iced::application("LaunchDock", update, view)
-        .subscription(subscription)
-        .window(iced::window::Settings {
-            size: iced::Size::new(500.0, 400.0),
-            position: iced::window::Position::Centered,
-            decorations: false,
-            level: iced::window::Level::AlwaysOnTop,
-            resizable: false,
-            ..Default::default()
-        })
-        .run_with(|| (LauncherApp::new(model), Task::none()))
 }
