@@ -177,7 +177,7 @@ fn get_app_name(path: &PathBuf) -> String {
 fn get_app_icon(path: &PathBuf) -> Option<String> {
     match std::env::consts::OS {
         "macos" => get_macos_app_icon(path),
-        "windows" => get_windows_app_icon(path),
+        // "windows" => get_windows_app_icon(path),
         _ => None, // Linux icons are handled via desktop entries
     }
 }
@@ -228,22 +228,22 @@ fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
     None
 }
 
-fn get_windows_app_icon(app_path: &PathBuf) -> Option<String> {
-    // For Windows applications, we don't extract embedded icons from .exe files
-    // since this requires complex Windows API calls to ExtractIconEx or similar.
-    // 
-    // Extracting icons would involve:
-    // 1. Loading the .exe/.dll as a resource
-    // 2. Calling ExtractIconEx to get icon handles
-    // 3. Converting icon handles to bitmap data
-    // 4. Saving as temporary .ico files that Iced can load
-    //
-    // For now, we return None and let the view handle missing icons gracefully
-    // without showing placeholder icons.
-    //
-    // Future enhancement: Implement proper icon extraction and caching
-    None
-}
+// fn get_windows_app_icon(app_path: &PathBuf) -> Option<String> {
+//     // For Windows applications, we don't extract embedded icons from .exe files
+//     // since this requires complex Windows API calls to ExtractIconEx or similar.
+//     // 
+//     // Extracting icons would involve:
+//     // 1. Loading the .exe/.dll as a resource
+//     // 2. Calling ExtractIconEx to get icon handles
+//     // 3. Converting icon handles to bitmap data
+//     // 4. Saving as temporary .ico files that Iced can load
+//     //
+//     // For now, we return None and let the view handle missing icons gracefully
+//     // without showing placeholder icons.
+//     //
+//     // Future enhancement: Implement proper icon extraction and caching
+//     None
+// }
 
 fn is_app(path: &PathBuf) -> bool {
     match std::env::consts::OS {
