@@ -20,7 +20,6 @@ enum Commands {
     Show,
     Hide,
     Status,
-    Ui,
     Logs {
         #[command(subcommand)]
         action: Option<logs::LogsAction>,
@@ -35,10 +34,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Start => handle_start(),
         Commands::Stop => send_daemon_command(daemon::DaemonCommand::Stop),
-        Commands::Show => send_daemon_command(daemon::DaemonCommand::Show),
+        Commands::Show => {
+            if std::env::consts::OS == "macos" {
+                handle_show_macos()
+            } else {
+                send_daemon_command(daemon::DaemonCommand::Show)
+            }
+        }
         Commands::Hide => send_daemon_command(daemon::DaemonCommand::Hide),
         Commands::Status => send_daemon_command(daemon::DaemonCommand::Status),
-        Commands::Ui => handle_ui(),
         Commands::Logs { action } => {
             logs::handle_logs_command(action)?;
             Ok(())
@@ -118,7 +122,7 @@ fn is_daemon_process() -> bool {
     }
 }
 
-fn handle_ui() -> Result<(), Box<dyn std::error::Error>> {
+fn handle_show_macos() -> Result<(), Box<dyn std::error::Error>> {
     logs::log_info("Starting UI process");
 
     let model = model::AppModel {
