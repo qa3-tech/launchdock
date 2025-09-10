@@ -1,373 +1,266 @@
+use ::image::{ImageBuffer, Rgb, codecs::png::PngEncoder};
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Shadow, Size, Subscription, Task, Theme,
-    application, exit, keyboard,
-    widget::{Column, Space, column, container, image, row, text, text_input},
+    Alignment, Background, Color, Element, Length, Padding, Size, keyboard,
+    widget::{column, container, image, row, text, text_input},
     window,
 };
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+use std::collections::HashMap;
 
-use crate::model::{AppModel, launch_app};
+use crate::{
+    logs,
+    model::{AppModel, launch_app},
+};
+
+pub fn run_ui(model: AppModel) -> Result<(), Box<dyn std::error::Error>> {
+    iced::application("", update, view)
+        .subscription(subscription)
+        .window(window::Settings {
+            size: Size::new(800.0, 600.0),
+            position: window::Position::Centered,
+            resizable: false,
+            decorations: false,
+            transparent: false,
+            level: window::Level::Normal,
+            // TODO: Add platform-specific settings to hide from taskbar/dock
+            // This may require newer iced version or custom winit integration
+            ..Default::default()
+        })
+        .run_with(move || (AppState::new(model), iced::Task::none()))?;
+
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
     InputChanged(String),
-    KeyPressed(keyboard::Key, keyboard::Modifiers),
+    KeyPressed(keyboard::Key),
 }
 
-pub fn run_ui(initial_model: AppModel) -> iced::Result {
-    // Calculate initial window height based on whether there are results
-    let initial_height = if initial_model.search_query.is_empty() {
-        80.0
-    } else {
-        let results = initial_model.filtered_apps().len().min(8);
-        80.0 + (results as f32 * 60.0)
-    };
-
-    application("Launchdock", update, view)
-        .subscription(subscription)
-        .theme(|_| Theme::Dark)
-        .window(window::Settings {
-            size: Size::new(700.0, initial_height),
-            position: window::Position::Centered,
-            visible: true,
-            resizable: false,
-            decorations: false,
-            transparent: true,
-            level: window::Level::AlwaysOnTop,
-            icon: None,
-            #[cfg(target_os = "macos")]
-            platform_specific: window::settings::PlatformSpecific {
-                title_hidden: true,
-                titlebar_transparent: true,
-                fullsize_content_view: false,
-            },
-            #[cfg(not(target_os = "macos"))]
-            platform_specific: Default::default(),
-            exit_on_close_request: true,
-            ..Default::default()
-        })
-        .run_with(|| (initial_model, Task::none()))
+struct AppState {
+    model: AppModel,
+    icon_cache: HashMap<String, iced::widget::image::Handle>,
 }
 
-fn update(model: &mut AppModel, message: Message) -> Task<Message> {
+impl AppState {
+    fn new(model: AppModel) -> Self {
+        let mut state = Self {
+            model,
+            icon_cache: HashMap::new(),
+        };
+        state.load_icons_for_filtered_apps();
+        state
+    }
+}
+
+fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
     match message {
         Message::InputChanged(value) => {
-            model.search_query = value;
-            model.selected_index = 0;
+            state.model.search_query = value;
+            state.model.selected_index = 0; // Reset to first item
+            state.load_icons_for_filtered_apps();
+            iced::Task::none()
         }
-        Message::KeyPressed(key, modifiers) => match key {
-            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                let results = model.filtered_apps();
-                if !results.is_empty() && model.selected_index < results.len() - 1 {
-                    model.selected_index += 1;
+        Message::KeyPressed(key) => {
+            match key {
+                keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                    state.model.search_query.clear();
+                    iced::exit()
                 }
-            }
-            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                if model.selected_index > 0 {
-                    model.selected_index -= 1;
-                }
-            }
-            keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                let results = model.filtered_apps();
-                if model.selected_index < results.len() {
-                    if let Some(app) = results.get(model.selected_index) {
+                keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                    let filtered = state.model.filtered_apps();
+                    if let Some(app) = filtered.get(state.model.selected_index) {
                         launch_app(app);
-                        model.search_query.clear();
-                        model.selected_index = 0;
-                        return exit();
+                        return iced::exit();
                     }
+                    iced::Task::none()
                 }
-            }
-            keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                // Clear and exit
-                model.search_query.clear();
-                model.selected_index = 0;
-                return exit();
-            }
-            keyboard::Key::Character(c) if modifiers.command() => {
-                if let Ok(num) = c.parse::<usize>() {
-                    if num < 8 {
-                        let results = model.filtered_apps();
-                        if num < results.len() {
-                            if let Some(app) = results.get(num) {
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                    let filtered = state.model.filtered_apps();
+                    if !filtered.is_empty() {
+                        state.model.selected_index =
+                            (state.model.selected_index + 1).min(filtered.len() - 1);
+                    }
+                    iced::Task::none()
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                    if state.model.selected_index > 0 {
+                        state.model.selected_index -= 1;
+                    }
+                    iced::Task::none()
+                }
+                keyboard::Key::Character(c) => {
+                    // Handle Cmd/Win + number shortcuts
+                    if let Ok(num) = c.parse::<usize>() {
+                        if num >= 1 && num <= 8 {
+                            let index = num - 1;
+                            let filtered = state.model.filtered_apps();
+                            if let Some(app) = filtered.get(index) {
                                 launch_app(app);
-                                model.search_query.clear();
-                                model.selected_index = 0;
-                                return exit();
+                                return iced::exit();
                             }
                         }
                     }
+                    iced::Task::none()
                 }
+                _ => iced::Task::none(),
             }
-            _ => {}
-        },
+        }
     }
-    Task::none()
 }
 
-fn view(model: &AppModel) -> Element<'_, Message> {
-    let input = text_input("Search...", &model.search_query)
+fn subscription(_state: &AppState) -> iced::Subscription<Message> {
+    iced::keyboard::on_key_press(|key, _modifiers| Some(Message::KeyPressed(key)))
+}
+
+fn view(state: &AppState) -> Element<'_, Message> {
+    let input = text_input("Type to search applications...", &state.model.search_query)
         .on_input(Message::InputChanged)
-        .padding(16)
-        .size(18)
-        .width(Length::Fill)
-        .style(|_theme: &Theme, _status| text_input::Style {
+        .padding(Padding::from(12))
+        .size(16)
+        .style(|_, _| text_input::Style {
             background: Background::Color(Color::BLACK),
-            border: Border {
-                width: 0.0,
-                color: Color::TRANSPARENT,
-                radius: 8.0.into(),
-            },
-            icon: Color::from_rgb(0.7, 0.7, 0.7),
-            placeholder: Color::from_rgb(0.5, 0.5, 0.5),
-            value: Color::WHITE,
-            selection: Color::from_rgb(0.3, 0.5, 0.8),
-        });
+            border: iced::Border::default(),
+            icon: Color::WHITE,
+            placeholder: Color::from_rgb(0.7, 0.7, 0.7),
+            value: Color::from_rgb(0.96, 0.96, 0.96), // whitesmoke
+            selection: Color::from_rgb(0.3, 0.3, 0.8),
+        })
+        .width(Length::Fill);
 
-    let results = model.filtered_apps();
+    let filtered_apps = state.model.filtered_apps();
+    let max_results = 8.min(filtered_apps.len());
 
-    // Calculate the needed height
-    let content_height = if results.is_empty() {
-        Length::Shrink
-    } else {
-        Length::Fixed(60.0 + (results.len().min(8) as f32 * 60.0))
-    };
+    let mut app_list = column![].spacing(2);
 
-    let mut main_column = Column::new()
-        .push(
-            container(input).width(Length::Fill).padding([0, 20]), // Horizontal padding for centering
-        )
-        .spacing(0);
+    for (index, app) in filtered_apps.iter().take(max_results).enumerate() {
+        let is_selected = index == state.model.selected_index;
 
-    if !results.is_empty() {
-        let result_elements = results
-            .iter()
-            .enumerate()
-            .map(|(index, app)| {
-                // Try to use actual icon, fallback to emoji
-                let icon_element: Element<Message> = if let Some(icon_path) = &app.icon {
-                    if std::path::Path::new(icon_path).exists() {
-                        container(image(icon_path).width(24).height(24))
-                            .width(32)
-                            .height(32)
-                            .align_x(Alignment::Center)
-                            .align_y(Alignment::Center)
-                            .into()
-                    } else {
-                        container(text(get_app_icon(&app.name)).size(24))
-                            .width(32)
-                            .height(32)
-                            .align_x(Alignment::Center)
-                            .align_y(Alignment::Center)
-                            .into()
-                    }
-                } else {
-                    container(text(get_app_icon(&app.name)).size(24))
-                        .width(32)
-                        .height(32)
-                        .align_x(Alignment::Center)
-                        .align_y(Alignment::Center)
-                        .into()
-                };
+        let icon = state.get_app_icon(&app.name);
+        let icon_widget = image(icon).width(48).height(48);
 
-                let app_info = column![
-                    text(&app.name).size(16).color(Color::WHITE),
-                    text(app.description.as_deref().unwrap_or(""))
-                        .size(12)
-                        .color(Color::from_rgb(0.6, 0.6, 0.6))
-                ]
-                .spacing(2);
+        let app_name = text(&app.name)
+            .size(14)
+            .color(Color::from_rgb(0.96, 0.96, 0.96)); // whitesmoke
 
-                let shortcut = text(format!("⌘{}", index))
-                    .size(14)
-                    .color(Color::from_rgb(0.5, 0.5, 0.5));
+        let shortcut_symbol = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Win+"
+        };
+        let shortcut = text(format!("{}{}", shortcut_symbol, index + 1))
+            .size(12)
+            .color(Color::from_rgb(0.7, 0.7, 0.7));
 
-                let row_content = row![
-                    icon_element,
-                    Space::with_width(12),
-                    app_info,
-                    Space::with_width(Length::Fill),
-                    shortcut
-                ]
-                .align_y(Alignment::Center)
-                .padding(12);
+        let content = row![icon_widget, column![app_name, shortcut].spacing(2),]
+            .spacing(12)
+            .align_y(Alignment::Center);
 
-                container(row_content)
-                    .width(Length::Fill)
-                    .style(move |_theme: &Theme| container::Style {
-                        background: if index == model.selected_index {
-                            Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.15)))
-                        } else {
-                            Some(Background::Color(Color::BLACK))
-                        },
-                        border: Border::default(),
-                        shadow: Shadow::default(),
-                        text_color: Some(Color::WHITE),
-                    })
-                    .into()
-            })
-            .collect::<Vec<Element<Message>>>();
-
-        let results_container = container(Column::with_children(result_elements).spacing(0))
+        let item = container(content)
+            .padding(Padding::from(8))
             .width(Length::Fill)
-            .style(|_theme: &Theme| container::Style {
-                background: Some(Background::Color(Color::BLACK)),
-                border: Border {
-                    width: 1.0,
-                    color: Color::from_rgb(0.2, 0.2, 0.2),
-                    radius: 0.0.into(),
-                },
-                shadow: Shadow::default(),
-                text_color: Some(Color::WHITE),
+            .style(move |_| container::Style {
+                background: Some(Background::Color(if is_selected {
+                    Color::from_rgb(0.2, 0.2, 0.2) // Slightly lighter for selection
+                } else {
+                    Color::BLACK
+                })),
+                border: iced::Border::default(),
+                shadow: iced::Shadow::default(),
+                text_color: None,
             });
 
-        main_column = main_column.push(results_container);
+        app_list = app_list.push(item);
     }
 
-    container(main_column)
-        .padding(0)
-        .width(600)
-        .height(content_height)
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Background::Color(Color::from_rgb(0.2, 0.2, 0.2))),
-            border: Border {
-                width: 0.0,
-                color: Color::TRANSPARENT,
-                radius: 12.0.into(),
-            },
-            shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-                offset: iced::Vector::new(0.0, 4.0),
-                blur_radius: 20.0,
-            },
-            text_color: Some(Color::WHITE),
+    let content = column![
+        input,
+        container(app_list)
+            .padding(Padding::from(8))
+            .style(|_| container::Style {
+                background: Some(Background::Color(Color::BLACK)),
+                border: iced::Border::default(),
+                shadow: iced::Shadow::default(),
+                text_color: None,
+            })
+    ]
+    .spacing(0);
+
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Background::Color(Color::TRANSPARENT)),
+            border: iced::Border::default(),
+            shadow: iced::Shadow::default(),
+            text_color: None,
         })
         .into()
 }
 
-fn subscription(_model: &AppModel) -> Subscription<Message> {
-    keyboard::on_key_press(|key, modifiers| Some(Message::KeyPressed(key, modifiers)))
-}
-
-fn get_app_icon(name: &str) -> &'static str {
-    let lower = name.to_lowercase();
-
-    // System apps
-    if lower.contains("finder") {
-        return "📁";
-    }
-    if lower.contains("system preferences") || lower.contains("system settings") {
-        return "⚙️";
-    }
-    if lower.contains("terminal") || lower.contains("iterm") {
-        return "💻";
-    }
-    if lower.contains("activity monitor") {
-        return "📊";
-    }
-    if lower.contains("app store") {
-        return "🛍️";
+impl AppState {
+    fn load_icons_for_filtered_apps(&mut self) {
+        let filtered = self.model.filtered_apps();
+        for app in filtered.iter().take(8) {
+            if !self.icon_cache.contains_key(&app.name) {
+                let handle = self.load_or_generate_icon(app);
+                self.icon_cache.insert(app.name.clone(), handle);
+            }
+        }
     }
 
-    // Browsers
-    if lower.contains("chrome") {
-        return "🌐";
-    }
-    if lower.contains("firefox") {
-        return "🦊";
-    }
-    if lower.contains("safari") {
-        return "🧭";
-    }
-    if lower.contains("edge") {
-        return "🌊";
-    }
-    if lower.contains("brave") {
-        return "🦁";
+    fn get_app_icon(&self, app_name: &str) -> iced::widget::image::Handle {
+        self.icon_cache
+            .get(app_name)
+            .cloned()
+            .unwrap_or_else(|| self.generate_fallback_icon(app_name))
     }
 
-    // Development
-    if lower.contains("vscode") || lower.contains("visual studio code") || lower.contains("code") {
-        return "📝";
-    }
-    if lower.contains("xcode") {
-        return "🔨";
-    }
-    if lower.contains("sublime") {
-        return "✨";
-    }
-    if lower.contains("docker") {
-        return "🐳";
-    }
-    if lower.contains("github") {
-        return "🐙";
+    fn load_or_generate_icon(&self, app: &crate::model::App) -> iced::widget::image::Handle {
+        // Try to load real icon first using iced's built-in loading
+        if let Some(icon_path) = &app.icon {
+            // Use iced's from_path method for direct file loading
+            return iced::widget::image::Handle::from_path(icon_path);
+        }
+
+        // Fallback to generated icon
+        self.generate_fallback_icon(&app.name)
     }
 
-    // Communication
-    if lower.contains("slack") {
-        return "💬";
-    }
-    if lower.contains("discord") {
-        return "🎮";
-    }
-    if lower.contains("zoom") {
-        return "📹";
-    }
-    if lower.contains("teams") {
-        return "👥";
-    }
-    if lower.contains("mail") || lower.contains("outlook") {
-        return "📧";
-    }
-    if lower.contains("messages") {
-        return "💬";
-    }
-    if lower.contains("whatsapp") {
-        return "📞";
-    }
+    fn generate_fallback_icon(&self, app_name: &str) -> iced::widget::image::Handle {
+        // Create a deterministic but random-looking 48x48 icon based on app name
+        let base_seed = app_name.chars().map(|c| c as u64).sum::<u64>();
+        let mut img = ImageBuffer::new(48, 48);
 
-    // Media
-    if lower.contains("spotify") || lower.contains("music") {
-        return "🎵";
-    }
-    if lower.contains("photos") {
-        return "📷";
-    }
-    if lower.contains("vlc") {
-        return "🎞️";
-    }
+        // Generate a simple pixelated pattern
+        for y in 0..48 {
+            for x in 0..48 {
+                // Create blocks of 6x6 pixels for pixelated effect
+                let block_x = x / 6;
+                let block_y = y / 6;
+                let block_seed = block_x * 8 + block_y;
 
-    // Productivity
-    if lower.contains("notes") {
-        return "📝";
-    }
-    if lower.contains("calendar") {
-        return "📅";
-    }
-    if lower.contains("reminders") {
-        return "☑️";
-    }
-    if lower.contains("notion") {
-        return "📓";
-    }
+                let mut block_rng = ChaCha8Rng::seed_from_u64(base_seed + block_seed as u64);
 
-    // Creative
-    if lower.contains("figma") {
-        return "🎨";
-    }
-    if lower.contains("sketch") {
-        return "✏️";
-    }
-    if lower.contains("photoshop") {
-        return "🖼️";
-    }
+                let intensity = if block_rng.r#gen::<f32>() > 0.5 {
+                    200u8
+                } else {
+                    50u8
+                };
+                let color = [intensity, intensity, intensity];
 
-    // Utilities
-    if lower.contains("calculator") {
-        return "🧮";
-    }
-    if lower.contains("1password") || lower.contains("bitwarden") {
-        return "🔑";
-    }
+                img.put_pixel(x, y, Rgb(color));
+            }
+        }
 
-    "📦" // Default
+        // Convert to bytes
+        let mut bytes = Vec::new();
+        let encoder = PngEncoder::new(&mut bytes);
+        img.write_with_encoder(encoder).unwrap_or_else(|_| {
+            logs::log_error("Failed to encode generated icon");
+        });
+
+        iced::widget::image::Handle::from_bytes(bytes)
+    }
 }

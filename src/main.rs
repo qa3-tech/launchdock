@@ -78,17 +78,23 @@ fn send_daemon_command(cmd: daemon::DaemonCommand) -> Result<(), Box<dyn std::er
         return Ok(());
     }
     
-    // Create a temporary runtime for async operations
-    let rt = tokio::runtime::Runtime::new()?;
-    let response = rt.block_on(daemon::send_command(cmd))?;
+    // Use blocking socket operations instead of tokio
+    let response = daemon::send_command(cmd)?;
     
-    match response {
-        daemon::DaemonResponse::Ok => {
-            // Command acknowledged
+    if !response.success {
+        if let Some(error) = response.error {
+            eprintln!("Error: {}", error);
+            return Err(error.into());
         }
-        daemon::DaemonResponse::Status { running, visible } => {
+    }
+    
+    match response.data {
+        Some(daemon::DaemonResponseData::Status { running, visible }) => {
             println!("Daemon: {}", if running { "Running" } else { "Stopped" });
             println!("UI: {}", if visible { "Visible" } else { "Hidden" });
+        }
+        None => {
+            // Command acknowledged successfully
         }
     }
     

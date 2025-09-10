@@ -1,9 +1,16 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process, sync::mpsc, thread};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
+use std::{
+    fs,
+    io::{Read, Write},
+    path::PathBuf,
+    process,
+    sync::mpsc,
+    thread,
+    time::Duration,
 };
+
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 
 use crate::{
     logs,
@@ -20,16 +27,41 @@ pub enum DaemonCommand {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum DaemonResponse {
-    Ok,
+pub struct DaemonResponse {
+    pub success: bool,
+    pub error: Option<String>,
+    pub data: Option<DaemonResponseData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum DaemonResponseData {
     Status { running: bool, visible: bool },
 }
 
-#[derive(Debug)]
-enum InternalEvent {
-    ShowUi(AppModel),
-    UiClosed,
-    Shutdown,
+impl DaemonResponse {
+    pub fn ok() -> Self {
+        Self {
+            success: true,
+            error: None,
+            data: None,
+        }
+    }
+
+    pub fn ok_with_data(data: DaemonResponseData) -> Self {
+        Self {
+            success: true,
+            error: None,
+            data: Some(data),
+        }
+    }
+
+    pub fn error(message: String) -> Self {
+        Self {
+            success: false,
+            error: Some(message),
+            data: None,
+        }
+    }
 }
 
 fn config_dir() -> PathBuf {
@@ -91,17 +123,15 @@ fn is_process_running(pid: u32) -> bool {
     }
 }
 
-pub async fn send_command(
-    cmd: DaemonCommand,
-) -> Result<DaemonResponse, Box<dyn std::error::Error>> {
-    let mut stream = UnixStream::connect(socket_path()).await?;
+pub fn send_command(cmd: DaemonCommand) -> Result<DaemonResponse, Box<dyn std::error::Error>> {
+    let mut stream = UnixStream::connect(socket_path())?;
     let data = serde_json::to_vec(&cmd)?;
 
-    stream.write_all(&data).await?;
-    stream.shutdown().await?;
+    stream.write_all(&data)?;
+    stream.shutdown(std::net::Shutdown::Write)?;
 
     let mut buffer = Vec::new();
-    stream.read_to_end(&mut buffer).await?;
+    stream.read_to_end(&mut buffer)?;
 
     let response: DaemonResponse = serde_json::from_slice(&buffer)?;
     Ok(response)
@@ -111,58 +141,11 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(config_dir())?;
     fs::write(pid_file(), process::id().to_string())?;
 
-    // Use bounded channel with capacity 1 to prevent multiple ShowUi events
-    let (to_main_tx, to_main_rx) = mpsc::sync_channel::<InternalEvent>(1);
-    let (from_main_tx, from_main_rx) = mpsc::channel::<InternalEvent>();
-
-    thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        rt.block_on(async {
-            if let Err(e) = async_task_loop(to_main_tx, from_main_rx).await {
-                logs::log_error(&format!("Async task error: {}", e));
-            }
-        });
-    });
-
-    logs::log_info(&format!(
-        "LaunchDock daemon started (PID: {})",
-        process::id()
-    ));
-
-    for event in to_main_rx {
-        match event {
-            InternalEvent::ShowUi(model) => {
-                logs::log_info("Showing UI on main thread");
-
-                if let Err(e) = run_ui(model) {
-                    logs::log_error(&format!("UI error: {}", e));
-                }
-
-                // UI has closed, notify async thread
-                let _ = from_main_tx.send(InternalEvent::UiClosed);
-            }
-            InternalEvent::Shutdown => {
-                logs::log_info("Shutdown received");
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    cleanup();
-    Ok(())
-}
-
-async fn async_task_loop(
-    to_main: mpsc::SyncSender<InternalEvent>,
-    from_main: mpsc::Receiver<InternalEvent>,
-) -> Result<(), Box<dyn std::error::Error>> {
+    // Remove old socket if it exists
     let _ = fs::remove_file(socket_path());
+
     let listener = UnixListener::bind(socket_path())?;
+    listener.set_nonblocking(true)?;
 
     let mut model = AppModel {
         all_apps: discover_apps(),
@@ -170,79 +153,136 @@ async fn async_task_loop(
         ..Default::default()
     };
 
-    logs::log_info("Daemon ready");
+    // Channel for UI thread to signal when it's closed
+    let (ui_closed_tx, ui_closed_rx) = mpsc::channel::<()>();
+    let mut ui_thread_handle: Option<thread::JoinHandle<()>> = None;
+
+    logs::log_info(&format!(
+        "LaunchDock daemon started (PID: {})",
+        process::id()
+    ));
     logs::log_info(&format!("Socket: {:?}", socket_path()));
+    logs::log_info("Daemon ready");
 
     loop {
-        tokio::select! {
-            result = listener.accept() => {
-                if let Ok((mut stream, _)) = result {
-                    if let Some(response) = handle_client_connection(&mut stream, &mut model, &to_main).await {
-                        let data = serde_json::to_vec(&response)?;
-                        let _ = stream.write_all(&data).await;
-                    }
+        // Check for UI thread completion
+        if let Ok(_) = ui_closed_rx.try_recv() {
+            model.ui_visible = false;
+            if let Some(handle) = ui_thread_handle.take() {
+                let _ = handle.join();
+            }
+            logs::log_info("UI thread closed");
+        }
+
+        // Check for incoming connections
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let (response, should_stop) = handle_client_connection(
+                    &mut stream,
+                    &mut model,
+                    &ui_closed_tx,
+                    &mut ui_thread_handle,
+                );
+
+                let response_data = serde_json::to_vec(&response)?;
+                let _ = stream.write_all(&response_data);
+                
+                if should_stop {
+                    break;
                 }
             }
-
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                if let Ok(event) = from_main.try_recv() {
-                    match event {
-                        InternalEvent::UiClosed => {
-                            model.ui_visible = false;
-                            logs::log_info("UI closed");
-                        }
-                        _ => {}
-                    }
-                }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // No connection available, sleep briefly
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Err(e) => {
+                logs::log_error(&format!("Accept error: {}", e));
+                break;
             }
         }
     }
+
+    cleanup();
+    Ok(())
 }
 
-async fn handle_client_connection(
+fn handle_client_connection(
     stream: &mut UnixStream,
     model: &mut AppModel,
-    to_main: &mpsc::SyncSender<InternalEvent>,
-) -> Option<DaemonResponse> {
+    ui_closed_tx: &mpsc::Sender<()>,
+    ui_thread_handle: &mut Option<thread::JoinHandle<()>>,
+) -> (DaemonResponse, bool) {
     let mut buffer = vec![0; 1024];
-    let n = stream.read(&mut buffer).await.ok()?;
-    let cmd: DaemonCommand = serde_json::from_slice(&buffer[..n]).ok()?;
 
-    let response = match cmd {
-        DaemonCommand::Show => {
-            if !model.ui_visible {
-                // try_send will fail if channel is full (UI already starting)
-                if let Ok(()) = to_main.try_send(InternalEvent::ShowUi(model.clone())) {
-                    model.ui_visible = true;
-                    model.search_query.clear();
-                    model.selected_index = 0;
-                    logs::log_info("UI show request sent");
-                } else {
-                    logs::log_info("UI already starting, ignoring show request");
-                }
-            } else {
-                logs::log_info("UI already visible");
-            }
-            DaemonResponse::Ok
-        }
-        DaemonCommand::Hide => {
-            // Hide is handled by the UI itself (ESC key closes window)
-            logs::log_info("Hide requested - close UI with ESC key");
-            DaemonResponse::Ok
-        }
-        DaemonCommand::Status => DaemonResponse::Status {
-            running: true,
-            visible: model.ui_visible,
-        },
-        DaemonCommand::Stop => {
-            logs::log_info("Stop requested");
-            let _ = to_main.try_send(InternalEvent::Shutdown);
-            cleanup();
-            std::process::exit(0);
-        }
+    let n = match stream.read(&mut buffer) {
+        Ok(n) => n,
+        Err(e) => return (DaemonResponse::error(format!("Failed to read command: {}", e)), false),
     };
 
-    Some(response)
+    let cmd: DaemonCommand = match serde_json::from_slice(&buffer[..n]) {
+        Ok(cmd) => cmd,
+        Err(e) => return (DaemonResponse::error(format!("Invalid command format: {}", e)), false),
+    };
+
+    match cmd {
+        DaemonCommand::Show => {
+            if model.ui_visible {
+                logs::log_info("UI already visible");
+                return (DaemonResponse::ok(), false);
+            }
+
+            // Clean up any previous UI thread
+            if let Some(handle) = ui_thread_handle.take() {
+                let _ = handle.join();
+            }
+
+            // Reset model state for new UI session
+            model.search_query.clear();
+            model.selected_index = 0;
+
+            // Clone model for the UI thread
+            let ui_model = model.clone();
+            let ui_tx = ui_closed_tx.clone();
+
+            // Spawn UI thread
+            let handle = thread::spawn(move || {
+                logs::log_info("Starting UI thread");
+
+                if let Err(e) = run_ui(ui_model) {
+                    logs::log_error(&format!("UI error: {}", e));
+                }
+
+                // Signal that UI has closed
+                let _ = ui_tx.send(());
+                logs::log_info("UI thread ending");
+            });
+
+            *ui_thread_handle = Some(handle);
+            model.ui_visible = true;
+
+            logs::log_info("UI show request processed");
+            (DaemonResponse::ok(), false)
+        }
+
+        DaemonCommand::Hide => {
+            logs::log_info("Hide requested - close UI with ESC key or window close");
+            (DaemonResponse::ok(), false)
+        }
+
+        DaemonCommand::Status => (DaemonResponse::ok_with_data(DaemonResponseData::Status {
+            running: true,
+            visible: model.ui_visible,
+        }), false),
+
+        DaemonCommand::Stop => {
+            logs::log_info("Stop requested");
+            (DaemonResponse::ok_with_data(DaemonResponseData::Status {
+                running: false,
+                visible: false,
+            }), true)
+        }
+    }
 }
 
 fn cleanup() {
