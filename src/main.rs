@@ -20,6 +20,7 @@ enum Commands {
     Show,
     Hide,
     Status,
+    Ui,
     Logs {
         #[command(subcommand)]
         action: Option<logs::LogsAction>,
@@ -28,15 +29,16 @@ enum Commands {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     logs::init_logger()?;
-    
+
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Start => handle_start(),
         Commands::Stop => send_daemon_command(daemon::DaemonCommand::Stop),
         Commands::Show => send_daemon_command(daemon::DaemonCommand::Show),
         Commands::Hide => send_daemon_command(daemon::DaemonCommand::Hide),
         Commands::Status => send_daemon_command(daemon::DaemonCommand::Status),
+        Commands::Ui => handle_ui(),
         Commands::Logs { action } => {
             logs::handle_logs_command(action)?;
             Ok(())
@@ -50,15 +52,15 @@ fn handle_start() -> Result<(), Box<dyn std::error::Error>> {
         // We ARE the daemon - run it directly
         return daemon::run_daemon();
     }
-    
+
     // Check if daemon is already running
     if daemon::is_running() {
         println!("LaunchDock is already running");
         return Ok(());
     }
-    
+
     println!("Starting LaunchDock daemon...");
-    
+
     // Spawn daemon as separate process
     let exe = std::env::current_exe()?;
     let child = process::Command::new(exe)
@@ -67,7 +69,7 @@ fn handle_start() -> Result<(), Box<dyn std::error::Error>> {
         .stdout(process::Stdio::null())
         .stderr(process::Stdio::null())
         .spawn()?;
-    
+
     println!("Daemon started with PID: {}", child.id());
     Ok(())
 }
@@ -77,17 +79,16 @@ fn send_daemon_command(cmd: daemon::DaemonCommand) -> Result<(), Box<dyn std::er
         println!("LaunchDock is not running. Use 'launchdock start' to start it.");
         return Ok(());
     }
-    
-    // Use blocking socket operations instead of tokio
+
     let response = daemon::send_command(cmd)?;
-    
+
     if !response.success {
         if let Some(error) = response.error {
             eprintln!("Error: {}", error);
             return Err(error.into());
         }
     }
-    
+
     match response.data {
         Some(daemon::DaemonResponseData::Status { running, visible }) => {
             println!("Daemon: {}", if running { "Running" } else { "Stopped" });
@@ -97,7 +98,7 @@ fn send_daemon_command(cmd: daemon::DaemonCommand) -> Result<(), Box<dyn std::er
             // Command acknowledged successfully
         }
     }
-    
+
     Ok(())
 }
 
@@ -108,11 +109,26 @@ fn is_daemon_process() -> bool {
         // Check if stdin is a terminal
         unsafe { libc::isatty(0) == 0 }
     }
-    
+
     #[cfg(windows)]
     {
         // On Windows, check if we have a console window
         use winapi::um::wincon::GetConsoleWindow;
         unsafe { GetConsoleWindow().is_null() }
     }
+}
+
+fn handle_ui() -> Result<(), Box<dyn std::error::Error>> {
+    logs::log_info("Starting UI process");
+
+    let model = model::AppModel {
+        all_apps: model::discover_apps(),
+        ui_visible: true,
+        ..Default::default()
+    };
+
+    view::run_ui(model)?;
+
+    logs::log_info("UI process ended");
+    Ok(())
 }

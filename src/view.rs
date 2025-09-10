@@ -14,17 +14,30 @@ use crate::{
 };
 
 pub fn run_ui(model: AppModel) -> Result<(), Box<dyn std::error::Error>> {
-    iced::application("", update, view)
+    iced::application("launchdockui", update, view)
         .subscription(subscription)
         .window(window::Settings {
             size: Size::new(800.0, 600.0),
             position: window::Position::Centered,
             resizable: false,
             decorations: false,
-            transparent: false,
-            level: window::Level::Normal,
-            // TODO: Add platform-specific settings to hide from taskbar/dock
-            // This may require newer iced version or custom winit integration
+            transparent: true,
+            level: window::Level::AlwaysOnTop,
+            icon: None,
+            exit_on_close_request: true,
+            #[cfg(target_os = "macos")]
+            platform_specific: window::settings::PlatformSpecific {
+                title_hidden: true,
+                titlebar_transparent: true,
+                fullsize_content_view: false,
+            },
+            #[cfg(target_os = "linux")]
+            platform_specific: window::settings::PlatformSpecific { skip_taskbar: true },
+            #[cfg(target_os = "windows")]
+            platform_specific: window::settings::PlatformSpecific {
+                skip_taskbar: true,
+                undecorated_shadow: false,
+            },
             ..Default::default()
         })
         .run_with(move || (AppState::new(model), iced::Task::none()))?;

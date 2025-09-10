@@ -186,7 +186,7 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 
                 let response_data = serde_json::to_vec(&response)?;
                 let _ = stream.write_all(&response_data);
-                
+
                 if should_stop {
                     break;
                 }
@@ -217,12 +217,22 @@ fn handle_client_connection(
 
     let n = match stream.read(&mut buffer) {
         Ok(n) => n,
-        Err(e) => return (DaemonResponse::error(format!("Failed to read command: {}", e)), false),
+        Err(e) => {
+            return (
+                DaemonResponse::error(format!("Failed to read command: {}", e)),
+                false,
+            );
+        }
     };
 
     let cmd: DaemonCommand = match serde_json::from_slice(&buffer[..n]) {
         Ok(cmd) => cmd,
-        Err(e) => return (DaemonResponse::error(format!("Invalid command format: {}", e)), false),
+        Err(e) => {
+            return (
+                DaemonResponse::error(format!("Invalid command format: {}", e)),
+                false,
+            );
+        }
     };
 
     match cmd {
@@ -249,8 +259,30 @@ fn handle_client_connection(
             let handle = thread::spawn(move || {
                 logs::log_info("Starting UI thread");
 
-                if let Err(e) = run_ui(ui_model) {
-                    logs::log_error(&format!("UI error: {}", e));
+                // Check if we're on main thread (macOS requirement)
+                logs::log_info(&format!("UI thread ID: {:?}", thread::current().id()));
+                logs::log_info(&format!(
+                    "Is main thread: {}",
+                    thread::current().name() == Some("main")
+                ));
+
+                // Set panic hook to catch UI framework panics
+                let original_hook = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|panic_info| {
+                    logs::log_error(&format!("UI thread panic: {}", panic_info));
+                }));
+
+                let result = std::panic::catch_unwind(|| {
+                    if let Err(e) = run_ui(ui_model) {
+                        logs::log_error(&format!("UI error: {}", e));
+                    }
+                });
+
+                // Restore original panic hook
+                std::panic::set_hook(original_hook);
+
+                if let Err(e) = result {
+                    logs::log_error(&format!("UI thread panicked: {:?}", e));
                 }
 
                 // Signal that UI has closed
@@ -270,17 +302,23 @@ fn handle_client_connection(
             (DaemonResponse::ok(), false)
         }
 
-        DaemonCommand::Status => (DaemonResponse::ok_with_data(DaemonResponseData::Status {
-            running: true,
-            visible: model.ui_visible,
-        }), false),
+        DaemonCommand::Status => (
+            DaemonResponse::ok_with_data(DaemonResponseData::Status {
+                running: true,
+                visible: model.ui_visible,
+            }),
+            false,
+        ),
 
         DaemonCommand::Stop => {
             logs::log_info("Stop requested");
-            (DaemonResponse::ok_with_data(DaemonResponseData::Status {
-                running: false,
-                visible: false,
-            }), true)
+            (
+                DaemonResponse::ok_with_data(DaemonResponseData::Status {
+                    running: false,
+                    visible: false,
+                }),
+                true,
+            )
         }
     }
 }
