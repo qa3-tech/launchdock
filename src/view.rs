@@ -13,7 +13,7 @@ use crate::{
     model::{AppModel, launch_app},
 };
 
-pub fn run_ui(model: AppModel) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
     iced::application("launchdockui", update, view)
         .subscription(subscription)
         .window(window::Settings {
@@ -42,7 +42,7 @@ pub fn run_ui(model: AppModel) -> Result<(), Box<dyn std::error::Error>> {
         })
         .run_with(move || (AppState::new(model), iced::Task::none()))?;
 
-    Ok(())
+    Ok(AppModel::default())
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +53,8 @@ pub enum Message {
 
 struct AppState {
     model: AppModel,
+    search_query: String,
+    selected_index: usize,
     icon_cache: HashMap<String, iced::widget::image::Handle>,
 }
 
@@ -60,55 +62,72 @@ impl AppState {
     fn new(model: AppModel) -> Self {
         let mut state = Self {
             model,
+            selected_index: 0,
+            search_query: String::new(),
             icon_cache: HashMap::new(),
         };
         state.load_icons_for_filtered_apps();
         state
+    }
+
+    pub fn filtered_apps(&self) -> Vec<&crate::model::App> {
+        if self.search_query.is_empty() {
+            Vec::new()
+        } else {
+            self.model
+                .all_apps
+                .iter()
+                .filter(|app| {
+                    let query = self.search_query.to_lowercase();
+                    app.name.to_lowercase().contains(&query)
+                        || app
+                            .description
+                            .as_ref()
+                            .map(|desc| desc.to_lowercase().contains(&query))
+                            .unwrap_or(false)
+                })
+                .collect()
+        }
     }
 }
 
 fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
     match message {
         Message::InputChanged(value) => {
-            state.model.search_query = value;
-            state.model.selected_index = 0; // Reset to first item
+            state.search_query = value;
+            state.selected_index = 0; // Reset to first item
             state.load_icons_for_filtered_apps();
             iced::Task::none()
         }
         Message::KeyPressed(key) => {
             match key {
-                keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                    state.model.search_query.clear();
-                    iced::exit()
-                }
+                keyboard::Key::Named(keyboard::key::Named::Escape) => return iced::exit(),
                 keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                    let filtered = state.model.filtered_apps();
-                    if let Some(app) = filtered.get(state.model.selected_index) {
+                    let filtered = state.filtered_apps();
+                    if let Some(app) = filtered.get(state.selected_index) {
                         launch_app(app);
-                        return iced::exit();
                     }
-                    iced::Task::none()
+                    return iced::exit();
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                    let filtered = state.model.filtered_apps();
+                    let filtered = state.filtered_apps();
                     if !filtered.is_empty() {
-                        state.model.selected_index =
-                            (state.model.selected_index + 1).min(filtered.len() - 1);
+                        state.selected_index = (state.selected_index + 1).min(filtered.len() - 1);
                     }
                     iced::Task::none()
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                    if state.model.selected_index > 0 {
-                        state.model.selected_index -= 1;
+                    if state.selected_index > 0 {
+                        state.selected_index -= 1;
                     }
                     iced::Task::none()
                 }
-                keyboard::Key::Character(c) => {
-                    // Handle Cmd/Win + number shortcuts
+                keyboard::Key::Character(ref c) => {
+                    // Use ref to avoid moving
                     if let Ok(num) = c.parse::<usize>() {
                         if num >= 1 && num <= 8 {
                             let index = num - 1;
-                            let filtered = state.model.filtered_apps();
+                            let filtered = state.filtered_apps();
                             if let Some(app) = filtered.get(index) {
                                 launch_app(app);
                                 return iced::exit();
@@ -128,10 +147,10 @@ fn subscription(_state: &AppState) -> iced::Subscription<Message> {
 }
 
 fn view(state: &AppState) -> Element<'_, Message> {
-    let input = text_input("Type to search applications...", &state.model.search_query)
+    let input = text_input("Type to search applications...", &state.search_query)
         .on_input(Message::InputChanged)
         .padding(Padding::from(12))
-        .size(16)
+        .size(20)
         .style(|_, _| text_input::Style {
             background: Background::Color(Color::BLACK),
             border: iced::Border::default(),
@@ -142,19 +161,19 @@ fn view(state: &AppState) -> Element<'_, Message> {
         })
         .width(Length::Fill);
 
-    let filtered_apps = state.model.filtered_apps();
+    let filtered_apps = state.filtered_apps();
     let max_results = 8.min(filtered_apps.len());
 
     let mut app_list = column![].spacing(2);
 
     for (index, app) in filtered_apps.iter().take(max_results).enumerate() {
-        let is_selected = index == state.model.selected_index;
+        let is_selected = index == state.selected_index;
 
         let icon = state.get_app_icon(&app.name);
         let icon_widget = image(icon).width(48).height(48);
 
         let app_name = text(&app.name)
-            .size(14)
+            .size(20)
             .color(Color::from_rgb(0.96, 0.96, 0.96)); // whitesmoke
 
         let shortcut_symbol = if cfg!(target_os = "macos") {
@@ -192,7 +211,7 @@ fn view(state: &AppState) -> Element<'_, Message> {
         container(app_list)
             .padding(Padding::from(8))
             .style(|_| container::Style {
-                background: Some(Background::Color(Color::BLACK)),
+                background: Some(Background::Color(Color::TRANSPARENT)),
                 border: iced::Border::default(),
                 shadow: iced::Shadow::default(),
                 text_color: None,
@@ -214,11 +233,19 @@ fn view(state: &AppState) -> Element<'_, Message> {
 
 impl AppState {
     fn load_icons_for_filtered_apps(&mut self) {
-        let filtered = self.model.filtered_apps();
-        for app in filtered.iter().take(8) {
-            if !self.icon_cache.contains_key(&app.name) {
-                let handle = self.load_or_generate_icon(app);
-                self.icon_cache.insert(app.name.clone(), handle);
+        let app_names: Vec<String> = self
+            .filtered_apps()
+            .iter()
+            .take(8)
+            .map(|app| app.name.clone())
+            .collect();
+
+        for name in app_names {
+            if !self.icon_cache.contains_key(&name) {
+                if let Some(app) = self.model.all_apps.iter().find(|a| a.name == name) {
+                    let handle = self.load_or_generate_icon(app);
+                    self.icon_cache.insert(name, handle);
+                }
             }
         }
     }

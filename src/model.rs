@@ -52,31 +52,10 @@ pub struct App {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppModel {
     pub all_apps: Vec<App>,
-    pub search_query: String,
-    pub selected_index: usize,
     pub ui_visible: bool,
 }
 
-impl AppModel {
-    pub fn filtered_apps(&self) -> Vec<&App> {
-        if self.search_query.is_empty() {
-            Vec::new()
-        } else {
-            self.all_apps
-                .iter()
-                .filter(|app| {
-                    let query = self.search_query.to_lowercase();
-                    app.name.to_lowercase().contains(&query)
-                        || app
-                            .description
-                            .as_ref()
-                            .map(|desc| desc.to_lowercase().contains(&query))
-                            .unwrap_or(false)
-                })
-                .collect()
-        }
-    }
-}
+impl AppModel {}
 
 pub fn discover_apps() -> Vec<App> {
     logs::log_info("Discovering applications...");
@@ -214,8 +193,11 @@ fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
                 if let Some(string_start) = content[start..].find("<string>") {
                     let string_content_start = start + string_start + 8;
                     if let Some(string_end) = content[string_content_start..].find("</string>") {
-                        let icon_name = &content[string_content_start..string_content_start + string_end];
-                        let icon_path = app_path.join("Contents/Resources").join(format!("{}.icns", icon_name.trim()));
+                        let icon_name =
+                            &content[string_content_start..string_content_start + string_end];
+                        let icon_path = app_path
+                            .join("Contents/Resources")
+                            .join(format!("{}.icns", icon_name.trim()));
                         if icon_path.exists() {
                             return Some(icon_path.to_string_lossy().to_string());
                         }
@@ -231,7 +213,7 @@ fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
 // fn get_windows_app_icon(app_path: &PathBuf) -> Option<String> {
 //     // For Windows applications, we don't extract embedded icons from .exe files
 //     // since this requires complex Windows API calls to ExtractIconEx or similar.
-//     // 
+//     //
 //     // Extracting icons would involve:
 //     // 1. Loading the .exe/.dll as a resource
 //     // 2. Calling ExtractIconEx to get icon handles

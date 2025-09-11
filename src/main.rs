@@ -125,13 +125,14 @@ fn is_daemon_process() -> bool {
 fn handle_show_macos() -> Result<(), Box<dyn std::error::Error>> {
     logs::log_info("Starting UI process");
 
-    let model = model::AppModel {
+    let mut model = model::AppModel {
         all_apps: model::discover_apps(),
         ui_visible: true,
         ..Default::default()
     };
 
-    view::run_ui(model)?;
+    let final_model = view::run_ui(model.clone())?;
+    model.ui_visible = final_model.ui_visible;
 
     logs::log_info("UI process ended");
     Ok(())

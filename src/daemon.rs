@@ -3,9 +3,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::PathBuf,
-    process,
-    sync::mpsc,
-    thread,
+    process, thread,
     time::Duration,
 };
 
@@ -154,7 +152,6 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Channel for UI thread to signal when it's closed
-    let (ui_closed_tx, ui_closed_rx) = mpsc::channel::<()>();
     let mut ui_thread_handle: Option<thread::JoinHandle<()>> = None;
 
     logs::log_info(&format!(
@@ -166,23 +163,21 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         // Check for UI thread completion
-        if let Ok(_) = ui_closed_rx.try_recv() {
-            model.ui_visible = false;
-            if let Some(handle) = ui_thread_handle.take() {
-                let _ = handle.join();
+        if let Some(ref handle) = ui_thread_handle {
+            if handle.is_finished() {
+                model.ui_visible = false;
+                if let Some(handle) = ui_thread_handle.take() {
+                    let _ = handle.join();
+                }
+                logs::log_info("UI thread closed");
             }
-            logs::log_info("UI thread closed");
         }
 
         // Check for incoming connections
         match listener.accept() {
             Ok((mut stream, _)) => {
-                let (response, should_stop) = handle_client_connection(
-                    &mut stream,
-                    &mut model,
-                    &ui_closed_tx,
-                    &mut ui_thread_handle,
-                );
+                let (response, should_stop) =
+                    handle_client_connection(&mut stream, &mut model, &mut ui_thread_handle);
 
                 let response_data = serde_json::to_vec(&response)?;
                 let _ = stream.write_all(&response_data);
@@ -210,7 +205,6 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 fn handle_client_connection(
     stream: &mut UnixStream,
     model: &mut AppModel,
-    ui_closed_tx: &mpsc::Sender<()>,
     ui_thread_handle: &mut Option<thread::JoinHandle<()>>,
 ) -> (DaemonResponse, bool) {
     let mut buffer = vec![0; 1024];
@@ -247,13 +241,8 @@ fn handle_client_connection(
                 let _ = handle.join();
             }
 
-            // Reset model state for new UI session
-            model.search_query.clear();
-            model.selected_index = 0;
-
             // Clone model for the UI thread
             let ui_model = model.clone();
-            let ui_tx = ui_closed_tx.clone();
 
             // Spawn UI thread
             let handle = thread::spawn(move || {
@@ -285,8 +274,6 @@ fn handle_client_connection(
                     logs::log_error(&format!("UI thread panicked: {:?}", e));
                 }
 
-                // Signal that UI has closed
-                let _ = ui_tx.send(());
                 logs::log_info("UI thread ending");
             });
 
@@ -304,7 +291,7 @@ fn handle_client_connection(
 
         DaemonCommand::Status => (
             DaemonResponse::ok_with_data(DaemonResponseData::Status {
-                running: true,
+                running: is_running(),
                 visible: model.ui_visible,
             }),
             false,
