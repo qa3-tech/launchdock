@@ -1,23 +1,29 @@
 use ::image::{ImageBuffer, Rgb, codecs::png::PngEncoder};
 use iced::{
-    Alignment, Background, Color, Element, Length, Padding, Size, keyboard,
-    widget::{column, container, image, row, text, text_input},
+    Alignment, Background, Color, Element, Length, Padding, Size,
+    daemon::Appearance,
+    keyboard,
+    widget::{column, container, image, row, scrollable, text, text_input},
     window,
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::collections::HashMap;
 
 use crate::{
     logs,
-    model::{AppModel, launch_app},
+    model::{App, AppModel, launch_app},
 };
 
 pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
-    iced::application("launchdockui", update, view)
+    iced::application("launchdock", update, view)
         .subscription(subscription)
+        .transparent(true)
+        .style(|_, _| Appearance {
+            background_color: iced::Color::TRANSPARENT,
+            text_color: iced::Color::WHITE,
+        })
         .window(window::Settings {
-            size: Size::new(800.0, 600.0),
+            size: Size::new(600.0, 530.0),
             position: window::Position::Centered,
             resizable: false,
             decorations: false,
@@ -32,7 +38,11 @@ pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
                 fullsize_content_view: false,
             },
             #[cfg(target_os = "linux")]
-            platform_specific: window::settings::PlatformSpecific { skip_taskbar: true },
+            platform_specific: window::settings::PlatformSpecific {
+                skip_taskbar: true,
+                titlebar_transparent: true,
+                fullsize_content_view: false,
+            },
             #[cfg(target_os = "windows")]
             platform_specific: window::settings::PlatformSpecific {
                 skip_taskbar: true,
@@ -49,92 +59,130 @@ pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
 pub enum Message {
     InputChanged(String),
     KeyPressed(keyboard::Key),
+    ForceExit,
 }
 
 struct AppState {
     model: AppModel,
     search_query: String,
     selected_index: usize,
-    icon_cache: HashMap<String, iced::widget::image::Handle>,
+    current_filtered_apps: Vec<App>,
 }
 
 impl AppState {
     fn new(model: AppModel) -> Self {
-        let mut state = Self {
+        let state = Self {
             model,
             selected_index: 0,
             search_query: String::new(),
-            icon_cache: HashMap::new(),
+            current_filtered_apps: Vec::new(),
         };
-        state.load_icons_for_filtered_apps();
         state
     }
 
-    pub fn filtered_apps(&self) -> Vec<&crate::model::App> {
+    pub fn filtered_apps(&self) -> Vec<&App> {
         if self.search_query.is_empty() {
-            Vec::new()
-        } else {
-            self.model
-                .all_apps
-                .iter()
-                .filter(|app| {
-                    let query = self.search_query.to_lowercase();
-                    app.name.to_lowercase().contains(&query)
-                        || app
-                            .description
-                            .as_ref()
-                            .map(|desc| desc.to_lowercase().contains(&query))
-                            .unwrap_or(false)
-                })
-                .collect()
+            return Vec::new();
         }
+
+        let query_chars: Vec<char> = self.search_query.to_lowercase().chars().collect();
+
+        let results: Vec<_> = self
+            .model
+            .all_apps
+            .iter()
+            .filter(|app| {
+                let app_name = app.name.to_lowercase();
+                let app_chars: Vec<char> = app_name.chars().collect();
+
+                // Check if query characters appear in order
+                let mut query_index = 0;
+
+                for app_char in app_chars {
+                    if query_index < query_chars.len() && app_char == query_chars[query_index] {
+                        query_index += 1;
+                    }
+                }
+
+                // All query characters must be found in order
+                let matches = query_index == query_chars.len();
+
+                // if matches {
+                //     logs::log_info(&format!(
+                //         "Fuzzy match: '{}' matches '{}'",
+                //         self.search_query, app.name
+                //     ));
+                // }
+
+                matches
+            })
+            .collect();
+
+        // logs::log_info(&format!(
+        //     "Query '{}' found {} apps",
+        //     self.search_query,
+        //     results.len()
+        // ));
+        results
     }
 }
 
+const DISPLAY_COUNT: usize = 7;
+
 fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
     match message {
+        Message::ForceExit => {
+            return iced::exit(); // Only update can return the exit task
+        }
         Message::InputChanged(value) => {
             state.search_query = value;
-            state.selected_index = 0; // Reset to first item
-            state.load_icons_for_filtered_apps();
+            state.selected_index = 0;
+            state.current_filtered_apps.clear();
+            state.current_filtered_apps = state.filtered_apps().into_iter().cloned().collect();
             iced::Task::none()
         }
         Message::KeyPressed(key) => {
             match key {
                 keyboard::Key::Named(keyboard::key::Named::Escape) => return iced::exit(),
                 keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                    let filtered = state.filtered_apps();
-                    if let Some(app) = filtered.get(state.selected_index) {
+                    if let Some(app) = state.current_filtered_apps.get(state.selected_index) {
                         launch_app(app);
                     }
                     return iced::exit();
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                    let filtered = state.filtered_apps();
-                    if !filtered.is_empty() {
-                        state.selected_index = (state.selected_index + 1).min(filtered.len() - 1);
+                    if !state.current_filtered_apps.is_empty() {
+                        let display_count = state.current_filtered_apps.len().min(DISPLAY_COUNT);
+                        state.selected_index = (state.selected_index + 1) % display_count;
                     }
                     iced::Task::none()
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                    if state.selected_index > 0 {
-                        state.selected_index -= 1;
+                    if !state.current_filtered_apps.is_empty() {
+                        let display_count = state.current_filtered_apps.len().min(DISPLAY_COUNT);
+                        state.selected_index = if state.selected_index == 0 {
+                            display_count - 1
+                        } else {
+                            state.selected_index - 1
+                        };
                     }
                     iced::Task::none()
                 }
                 keyboard::Key::Character(ref c) => {
-                    // Use ref to avoid moving
+                    // Handle shortcuts first
                     if let Ok(num) = c.parse::<usize>() {
-                        if num >= 1 && num <= 8 {
+                        if num >= 1 && num <= state.current_filtered_apps.len().min(DISPLAY_COUNT) {
                             let index = num - 1;
-                            let filtered = state.filtered_apps();
-                            if let Some(app) = filtered.get(index) {
+                            if let Some(app) = state.current_filtered_apps.get(index) {
                                 launch_app(app);
                                 return iced::exit();
                             }
                         }
                     }
-                    iced::Task::none()
+                    // For non-shortcut characters, treat as search input
+                    let mut new_search = state.search_query.clone();
+                    new_search.push_str(c);
+                    return update(state, Message::InputChanged(new_search));
                 }
                 _ => iced::Task::none(),
             }
@@ -143,81 +191,144 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
 }
 
 fn subscription(_state: &AppState) -> iced::Subscription<Message> {
-    iced::keyboard::on_key_press(|key, _modifiers| Some(Message::KeyPressed(key)))
+    iced::Subscription::batch([
+        // Force capture Escape before any widget can handle it
+        iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                ..
+            }) => Some(Message::ForceExit),
+            _ => None,
+        }),
+        // Regular keyboard handling for other keys
+        iced::keyboard::on_key_press(|key, _modifiers| {
+            match key {
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => None, // Skip, handled above
+                _ => Some(Message::KeyPressed(key)),
+            }
+        }),
+    ])
 }
 
 fn view(state: &AppState) -> Element<'_, Message> {
     let input = text_input("Type to search applications...", &state.search_query)
         .on_input(Message::InputChanged)
         .padding(Padding::from(12))
-        .size(20)
+        .size(24)
         .style(|_, _| text_input::Style {
-            background: Background::Color(Color::BLACK),
-            border: iced::Border::default(),
+            background: Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.96)),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
+                width: 1.0,
+                radius: 8.0.into(),
+            },
             icon: Color::WHITE,
-            placeholder: Color::from_rgb(0.7, 0.7, 0.7),
-            value: Color::from_rgb(0.96, 0.96, 0.96), // whitesmoke
+            placeholder: Color::from_rgb(0.8, 0.8, 0.8),
+            value: Color::from_rgb(0.96, 0.96, 0.96),
             selection: Color::from_rgb(0.3, 0.3, 0.8),
         })
         .width(Length::Fill);
 
-    let filtered_apps = state.filtered_apps();
-    let max_results = 8.min(filtered_apps.len());
+    let max_results = state.current_filtered_apps.len().min(DISPLAY_COUNT);
 
-    let mut app_list = column![].spacing(2);
+    let app_items: Vec<Element<Message>> = state
+        .current_filtered_apps
+        .iter()
+        .take(max_results)
+        .enumerate()
+        .map(|(index, app)| {
+            let is_selected = index == state.selected_index;
 
-    for (index, app) in filtered_apps.iter().take(max_results).enumerate() {
-        let is_selected = index == state.selected_index;
+            let icon = if let Some(icon_path) = &app.icon {
+                iced::widget::image::Handle::from_path(icon_path)
+            } else {
+                state.generate_fallback_icon(&app.name)
+            };
 
-        let icon = state.get_app_icon(&app.name);
-        let icon_widget = image(icon).width(48).height(48);
+            let icon_widget = image(icon).width(48).height(48);
 
-        let app_name = text(&app.name)
-            .size(20)
-            .color(Color::from_rgb(0.96, 0.96, 0.96)); // whitesmoke
+            let app_name = text(&app.name)
+                .size(24)
+                .color(Color::from_rgb(0.96, 0.96, 0.96));
 
-        let shortcut_symbol = if cfg!(target_os = "macos") {
-            "⌘"
-        } else {
-            "Win+"
-        };
-        let shortcut = text(format!("{}{}", shortcut_symbol, index + 1))
-            .size(12)
-            .color(Color::from_rgb(0.7, 0.7, 0.7));
+            let shortcut_symbol = if cfg!(target_os = "macos") {
+                "⌘"
+            } else {
+                "Win+"
+            };
+            let shortcut = text(format!("{}{}", shortcut_symbol, index + 1))
+                .size(18)
+                .color(Color::from_rgb(0.8, 0.8, 0.8));
 
-        let content = row![icon_widget, column![app_name, shortcut].spacing(2),]
+            let content = row![
+                icon_widget,
+                app_name,
+                iced::widget::horizontal_space(),
+                shortcut
+            ]
+            .padding(Padding {
+                top: 0.0,
+                right: 12.0,
+                bottom: 0.0,
+                left: 0.0,
+            })
             .spacing(12)
             .align_y(Alignment::Center);
 
-        let item = container(content)
-            .padding(Padding::from(8))
-            .width(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(if is_selected {
-                    Color::from_rgb(0.2, 0.2, 0.2) // Slightly lighter for selection
-                } else {
-                    Color::BLACK
-                })),
-                border: iced::Border::default(),
-                shadow: iced::Shadow::default(),
-                text_color: None,
-            });
+            container(content)
+                .padding(Padding::from(8))
+                .width(Length::Fill)
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.84))),
+                    border: iced::Border {
+                        color: if is_selected {
+                            Color::from_rgb(0.149, 0.498, 0.749)
+                        } else {
+                            Color::from_rgba(1.0, 1.0, 1.0, 0.8)
+                        },
+                        width: 2.0,
+                        radius: 6.0.into(),
+                    },
+                    shadow: iced::Shadow::default(),
+                    text_color: None,
+                })
+                .into()
+        })
+        .collect();
 
-        app_list = app_list.push(item);
-    }
+    let app_list = column(app_items).spacing(2);
 
     let content = column![
         input,
-        container(app_list)
-            .padding(Padding::from(8))
-            .style(|_| container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                border: iced::Border::default(),
-                shadow: iced::Shadow::default(),
-                text_color: None,
+        scrollable(app_list)
+            .id(scrollable::Id::new("app_list"))
+            .style(|_theme, _status| scrollable::Style {
+                container: container::Style {
+                    background: Some(Background::Color(Color::TRANSPARENT)),
+                    border: iced::Border::default(),
+                    shadow: iced::Shadow::default(),
+                    text_color: None,
+                },
+                vertical_rail: scrollable::Rail {
+                    background: Some(Background::Color(Color::TRANSPARENT)), // Hide track
+                    border: iced::Border::default(),
+                    scroller: scrollable::Scroller {
+                        color: Color::TRANSPARENT, // Hide thumb
+                        border: iced::Border::default(),
+                    },
+                },
+                horizontal_rail: scrollable::Rail {
+                    background: Some(Background::Color(Color::TRANSPARENT)),
+                    border: iced::Border::default(),
+                    scroller: scrollable::Scroller {
+                        color: Color::TRANSPARENT,
+                        border: iced::Border::default(),
+                    },
+                },
+                gap: Some(Background::Color(Color::TRANSPARENT)),
             })
     ]
-    .spacing(0);
+    .spacing(8);
 
     container(content)
         .width(Length::Fill)
@@ -232,41 +343,16 @@ fn view(state: &AppState) -> Element<'_, Message> {
 }
 
 impl AppState {
-    fn load_icons_for_filtered_apps(&mut self) {
-        let app_names: Vec<String> = self
-            .filtered_apps()
-            .iter()
-            .take(8)
-            .map(|app| app.name.clone())
-            .collect();
+    // fn load_or_generate_icon(&self, app: &crate::model::App) -> iced::widget::image::Handle {
+    //     // Try to load real icon first using iced's built-in loading
+    //     if let Some(icon_path) = &app.icon {
+    //         // Use iced's from_path method for direct file loading
+    //         return iced::widget::image::Handle::from_path(icon_path);
+    //     }
 
-        for name in app_names {
-            if !self.icon_cache.contains_key(&name) {
-                if let Some(app) = self.model.all_apps.iter().find(|a| a.name == name) {
-                    let handle = self.load_or_generate_icon(app);
-                    self.icon_cache.insert(name, handle);
-                }
-            }
-        }
-    }
-
-    fn get_app_icon(&self, app_name: &str) -> iced::widget::image::Handle {
-        self.icon_cache
-            .get(app_name)
-            .cloned()
-            .unwrap_or_else(|| self.generate_fallback_icon(app_name))
-    }
-
-    fn load_or_generate_icon(&self, app: &crate::model::App) -> iced::widget::image::Handle {
-        // Try to load real icon first using iced's built-in loading
-        if let Some(icon_path) = &app.icon {
-            // Use iced's from_path method for direct file loading
-            return iced::widget::image::Handle::from_path(icon_path);
-        }
-
-        // Fallback to generated icon
-        self.generate_fallback_icon(&app.name)
-    }
+    //     // Fallback to generated icon
+    //     self.generate_fallback_icon(&app.name)
+    // }
 
     fn generate_fallback_icon(&self, app_name: &str) -> iced::widget::image::Handle {
         // Create a deterministic but random-looking 48x48 icon based on app name
