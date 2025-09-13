@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs, path::PathBuf, process::Command};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::logs;
 
@@ -110,7 +115,7 @@ fn icon_path_exists(icon_path: &Option<String>) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<String> {
+fn discover_comprehensive_icon(app_path: &Path, app_name: &str) -> Option<String> {
     // Only process .app bundles for comprehensive search
     if app_path.extension().and_then(|s| s.to_str()) != Some("app") {
         return None;
@@ -189,7 +194,7 @@ fn extract_bundle_icon_name(plist_content: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<String> {
+fn discover_comprehensive_icon(app_path: &Path, app_name: &str) -> Option<String> {
     // Linux icon discovery - check standard icon theme directories
     let icon_theme_paths = vec![
         "/usr/share/icons/hicolor/48x48/apps/",
@@ -224,7 +229,7 @@ fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<Str
 }
 
 #[cfg(target_os = "windows")]
-fn discover_comprehensive_icon(app_path: &PathBuf, _app_name: &str) -> Option<String> {
+fn discover_comprehensive_icon(app_path: &Path, _app_name: &str) -> Option<String> {
     // Windows icon extraction would require complex Windows API calls
     // For now, return None and let the view handle fallback generation
 
@@ -280,7 +285,7 @@ fn scan_directory(path: &str) -> Vec<App> {
         .collect()
 }
 
-fn get_app_name(path: &PathBuf) -> String {
+fn get_app_name(path: &Path) -> String {
     match std::env::consts::OS {
         "macos" => path
             .file_stem()
@@ -295,7 +300,7 @@ fn get_app_name(path: &PathBuf) -> String {
     }
 }
 
-fn get_app_icon(path: &PathBuf) -> Option<String> {
+fn get_app_icon(path: &Path) -> Option<String> {
     match std::env::consts::OS {
         "macos" => get_macos_app_icon(path),
         // "windows" => get_windows_app_icon(path),
@@ -303,7 +308,7 @@ fn get_app_icon(path: &PathBuf) -> Option<String> {
     }
 }
 
-fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
+fn get_macos_app_icon(app_path: &Path) -> Option<String> {
     // Only process .app bundles
     if app_path.extension()?.to_str()? != "app" {
         return None;
@@ -318,7 +323,7 @@ fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
     None
 }
 
-fn is_app(path: &PathBuf) -> bool {
+fn is_app(path: &Path) -> bool {
     match std::env::consts::OS {
         "windows" => path
             .extension()
@@ -336,7 +341,7 @@ fn is_app(path: &PathBuf) -> bool {
     }
 }
 
-fn is_executable(path: &PathBuf) -> bool {
+fn is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -375,7 +380,7 @@ fn discover_desktop_entries() -> Vec<App> {
     apps
 }
 
-fn parse_desktop_entry(path: &PathBuf) -> Option<App> {
+fn parse_desktop_entry(path: &Path) -> Option<App> {
     let content = fs::read_to_string(path).ok()?;
     let mut name = None;
     let mut exec = None;

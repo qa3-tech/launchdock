@@ -128,7 +128,6 @@ fn handle_show_macos() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = model::AppModel {
         all_apps: model::discover_apps(),
         ui_visible: true,
-        ..Default::default()
     };
 
     let final_model = view::run_ui(model.clone())?;

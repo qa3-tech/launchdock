@@ -148,7 +148,6 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = AppModel {
         all_apps: discover_apps(),
         ui_visible: false,
-        ..Default::default()
     };
 
     // Channel for UI thread to signal when it's closed
