@@ -419,7 +419,6 @@ fn load_icon_from_path(
     Ok(iced::widget::image::Handle::from_bytes(icon_data))
 }
 
-
 /// Helper function to convert RGBA data to PNG bytes
 #[cfg(target_os = "macos")]
 fn rgba_to_png(
