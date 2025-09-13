@@ -110,14 +110,18 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.name }} launchdock
+          cp ../../../LICENSE .
+          cp ../../../INSTALL .
+          tar -czf ../../../${{ matrix.name }} launchdock LICENSE INSTALL
           cd -
 
       - name: Package binary (Windows)
         if: matrix.os == 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../${{ matrix.name }} launchdock.exe
+          cp ../../../LICENSE .
+          cp ../../../INSTALL .
+          7z a ../../../${{ matrix.name }} launchdock.exe LICENSE INSTALL
           cd -
 
       - name: Upload artifact
@@ -163,7 +167,12 @@ jobs:
 
             Download the appropriate binary for your platform below.
 
-            Please see the README for installation and usage instructions.
+            Each archive contains:
+            - The LaunchDock binary
+            - INSTALL file with setup instructions
+            - LICENSE file with dual licensing terms
+
+            See the INSTALL file in the archive for complete setup instructions.
           files: release-assets/*
           draft: true
           prerelease: false

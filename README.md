@@ -1,272 +1,251 @@
 # LaunchDock
 
-A fast, cross-platform application launcher that helps you quickly find and launch applications from your system's standard application directories.
+A fast, cross-platform application launcher with fuzzy search that helps you quickly find and launch applications from anywhere on your system.
 
 ## Features
 
-- **Cross-Platform**: Works seamlessly on Windows, Linux, and macOS
+- **Cross-Platform**: Works on Windows, Linux, and macOS
 - **Daemon Architecture**: Lightweight background service for instant response
-- **Global Hotkey**: Meta+Escape to quickly show launcher from anywhere
-- **Quick Launch**: Fast application discovery and launching
-- **System Integration**: Automatically scans standard application folders
-- **Simple CLI**: Easy-to-use command-line interface
-- **Show/Hide UI**: Toggle launcher visibility as needed
-- **Comprehensive Logging**: Automatic activity logging with easy log management
+- **Smart Fuzzy Search**: Intelligent character matching with proximity-based scoring
+- **Custom Hotkeys**: Configure any key combination to show the launcher
+- **Auto-Discovery**: Automatically finds applications in standard system directories
+- **Clean Interface**: Minimal, distraction-free design
+- **Icon Support**: Platform-specific icon loading with smart fallbacks
+- **System Integration**: Works with your OS's application management
 
 ## Installation
+
+### Prerequisites
+
+Ensure you have Rust 1.89+ installed on your system.
 
 ### From Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/qa3-tech/launchdock.git
 cd launchdock
-
-# Build and install
 cargo build --release
 cargo install --path .
 ```
 
-### Pre-built Binaries
+### From Binaries
 
 Download the latest release for your platform from the [releases page](https://github.com/qa3-tech/launchdock/releases).
 
-## Usage
+## Setup
 
-LaunchDock operates as a background daemon that you can control with simple commands:
+### 1. Start the Daemon
 
-### Starting the Daemon
+Add LaunchDock to your system startup so it runs automatically:
 
 ```bash
-# Start LaunchDock in the background
 launchdock start
 ```
+
+### 2. Configure Hotkeys
+
+Set up your preferred keyboard shortcut in your OS hotkey settings to run: `launchdock show`
+
+**Platform-specific instructions:**
+
+- **Windows**: Settings → System → Keyboard → Advanced keyboard settings → App shortcuts
+- **macOS**: System Preferences → Keyboard → Shortcuts → App Shortcuts
+- **Linux (GNOME)**: Settings → Keyboard → Custom Shortcuts
+- **Linux (KDE)**: System Settings → Shortcuts → Custom Shortcuts
+
+**Suggested hotkey combinations:**
+
+- `Super+Space` (recommended)
+- `Ctrl+Alt+Space`
+- `Meta+Escape`
+- Any combination that works for your workflow
+
+### 3. Verify Setup
+
+```bash
+# Check daemon status
+launchdock status
+
+# Test your configured hotkey
+# Should show the launcher interface
+```
+
+## Usage
 
 ### Basic Commands
 
 ```bash
-# Show the launcher interface
-launchdock show
-
-# Hide the launcher interface
-launchdock hide
-
-# Check daemon status
-launchdock status
-
-# Stop the daemon
+# Start/stop the daemon
+launchdock start
 launchdock stop
 
-# View recent logs
-launchdock logs
+# Show/hide the launcher
+launchdock show
+launchdock hide
 
-# Clear log file
+# Check status
+launchdock status
+
+# View logs
+launchdock logs
 launchdock logs clear
 ```
 
-### Global Hotkey
+### Using the Launcher
 
-Once the daemon is running, press **Meta+Escape** (Windows/Cmd+Escape on macOS, Super+Escape on Linux) to quickly show the launcher from anywhere.
+1. Press your configured hotkey to show the launcher
+2. Type to search for applications (fuzzy matching supported)
+3. Use arrow keys or number shortcuts (1-7) to select
+4. Press Enter to launch, or Escape to close
 
-### Example Workflow
+**Search Examples:**
 
-```bash
-# Start LaunchDock
-$ launchdock start
-Starting LaunchDock daemon...
+- Type `fx` to find Firefox
+- Type `gv` to find applications like "Gnome Video" or "GoodVibes"
+- Type `code` to find VS Code, Visual Studio Code, etc.
 
-# Check if it's running
-$ launchdock status
-Daemon: Running
-UI: Hidden
+## How It Works
 
-# Show the launcher
-$ launchdock show
-Launcher shown
+LaunchDock uses intelligent fuzzy search that matches characters in order but not necessarily consecutively. The search algorithm considers:
 
-# Check what's been happening
-$ launchdock logs
-[2025-01-17 14:30:15] INFO: LaunchDock daemon started
-[2025-01-17 14:30:16] INFO: Found 47 applications
-[2025-01-17 14:31:22] INFO: Launcher shown
-[2025-01-17 14:31:45] INFO: Launching: Firefox
+- **Character proximity**: Closer matches rank higher
+- **Application name length**: Shorter names get slight preference
+- **Early matches**: Matches at the beginning of names score higher
+- **Consecutive characters**: Sequential character matches get bonus points
 
-# When done, stop the daemon
-$ launchdock stop
-LaunchDock stopped
-```
-
-## Command Reference
-
-| Command | Description |
-|---------|-------------|
-| `start` | Start the LaunchDock daemon |
-| `stop` | Stop the running daemon |
-| `show` | Display the launcher interface |
-| `hide` | Hide the launcher interface |
-| `status` | Show current daemon and UI status |
-| `logs` | View or manage application logs |
-
-### Logs Subcommands
-
-| Subcommand | Description |
-|------------|-------------|
-| `logs` | Show last 50 log entries (default) |
-| `logs show -l <N>` | Show last N log entries |
-| `logs clear` | Clear current log file |
-
-## Logging
-
-LaunchDock automatically logs all activities to help with debugging and monitoring. Logs include daemon startup/shutdown, application discovery, launches, and any errors that occur.
-
-### Log File Location
-
-Logs are stored in platform-appropriate directories:
-
-- **Windows**: `%APPDATA%\launchdock\launchdock.log`
-- **macOS**: `~/Library/Logs/launchdock/launchdock.log`
-- **Linux**: `~/.local/share/launchdock/launchdock.log`
-
-### Managing Logs
-
-```bash
-# View recent logs
-launchdock logs
-
-# View more log entries
-launchdock logs show --lines 100
-
-# Clear log file (recommended when over 5MB)
-launchdock logs clear
-```
-
-Logs automatically warn when the file exceeds 5MB. You can clear them manually or use external tools like `grep` or `awk` for analysis:
-
-```bash
-# Filter for errors only  
-launchdock logs | grep ERROR
-
-# Count total log entries
-launchdock logs | wc -l
-
-# Search for specific application launches
-launchdock logs | grep "Launching:"
-```
+This means typing `psg` will find "Photoshop Graphics" before "Photo Studio Gallery" because the characters are closer together.
 
 ## Platform Support
 
 ### Windows
-- Scans `C:\Program Files\`, `C:\Program Files (x86)\`, and Start Menu shortcuts
-- Supports `.exe`, `.msi`, and `.appx` applications
+
+- Scans Program Files, Start Menu, and user application directories
+- Supports `.exe` applications
+- Future: Icon extraction from executables
 
 ### Linux
-- Scans `/usr/share/applications/`, `/usr/local/share/applications/`, and `~/.local/share/applications/`
-- Supports `.desktop` files and AppImages
+
+- Scans `/usr/share/applications/`, user applications, and desktop entries
+- Supports `.desktop` files, AppImages, and executables
+- Icon loading from standard theme directories
 
 ### macOS
-- Scans `/Applications/`, `/System/Applications/`, and `~/Applications/`
-- Supports `.app` bundles and `.dmg` files
+
+- Scans `/Applications/`, system apps, and user applications
+- Supports `.app` bundles with comprehensive icon discovery
+- Searches multiple icon naming patterns and formats
+
+## Configuration
+
+LaunchDock works out of the box with zero configuration. It automatically:
+
+- Discovers applications in standard system directories
+- Finds and loads application icons
+- Generates fallback icons for apps without icons
 
 ## Building from Source
 
-### Prerequisites
-
-- Rust 1.86 or later
-- Cargo package manager
-
-### Build Instructions
+### Development Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/qa3-tech/launchdock.git
 cd launchdock
 
-# Build in debug mode
+# Build debug version
 cargo build
-
-# Build optimized release
-cargo build --release
 
 # Run tests
 cargo test
+
+# Build optimized release
+cargo build --release
 
 # Install locally
 cargo install --path .
 ```
 
-### Development
+### Code Quality
 
 ```bash
-# Run in development mode
-cargo run -- start
-
-# Run with logging
-RUST_LOG=debug cargo run -- start
-
 # Format code
 cargo fmt
 
 # Lint code
 cargo clippy
+
+# Run with debug logging
+RUST_LOG=debug cargo run -- start
 ```
-
-## Architecture
-
-LaunchDock uses a client-server architecture:
-
-- **Main Process**: Handles CLI commands and communicates with daemon
-- **Daemon**: Background service that manages application discovery and UI
-- **UI Module**: Cross-platform interface for application selection
-- **Model**: Application data structures and business logic
-
-## Configuration
-
-LaunchDock automatically discovers applications from standard system directories. No manual configuration is required for basic usage.
 
 ## Troubleshooting
 
-### Daemon Won't Start
+### Daemon Issues
+
 ```bash
-# Check if already running
+# Check if running
 launchdock status
 
-# Check logs for errors
+# View error logs
 launchdock logs
 
-# Try stopping first
-launchdock stop
-launchdock start
+# Restart daemon
+launchdock stop && launchdock start
 ```
 
-### Applications Not Appearing
-- Ensure applications are installed in standard directories
-- Restart the daemon to refresh the application list: `launchdock stop && launchdock start`
-- Check system permissions for application directories
-- View logs to see what directories are being scanned: `launchdock logs`
+### Missing Applications
 
-### Performance Issues
-- Check if log file is too large: `launchdock logs` (warnings appear if >5MB)
-- Clear logs if needed: `launchdock logs clear`
-- Check logs for repeated errors: `launchdock logs | grep ERROR`
+- Ensure apps are installed in standard directories
+- Restart daemon to refresh: `launchdock stop && launchdock start`
+- Check logs to see scan results: `launchdock logs`
+- Verify system permissions for application directories
 
-### Platform-Specific Issues
+### Performance
 
-**Windows**: Run as administrator if scanning system directories fails  
-**Linux**: Ensure XDG desktop files are properly installed  
-**macOS**: Grant necessary permissions in System Preferences > Security & Privacy
+- Clear large log files: `launchdock logs clear`
+- Check for repeated errors: `launchdock logs | grep ERROR`
+
+### Platform-Specific
+
+**Windows**: Run as administrator if system directory scanning fails
+**Linux**: Ensure desktop entries are properly installed
+**macOS**: Grant permissions in System Preferences → Security & Privacy if needed
+
+## Architecture
+
+LaunchDock uses a clean client-server architecture:
+
+- **CLI Client**: Handles commands and communicates with daemon
+- **Background Daemon**: Manages application discovery and UI lifecycle
+- **UI Module**: Cross-platform launcher interface with Iced framework
+- **Model Layer**: Application data structures and fuzzy search logic
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+Contributions are welcome! Please see our dual licensing model below.
 
-### Development Setup
+### Development Workflow
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes and add tests
+4. Ensure code quality: `cargo fmt && cargo clippy`
+5. Commit: `git commit -m 'Add amazing feature'`
+6. Push: `git push origin feature/amazing-feature`
+7. Open a Pull Request
+
+## License
+
+This project uses a dual licensing model:
+
+- **Open Source**: Licensed under GPL-3.0 for open source projects
+- **Commercial**: Separate commercial license required for proprietary use
+
+Contact contact@qa3.tech for commercial licensing inquiries.
+
+See [LICENSE](LICENSE) for complete terms.
 
 ---
 
 **LaunchDock** - Launch applications faster, across all platforms.
+
+Copyright © 2025 QA3 Technologies LLC

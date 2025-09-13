@@ -85,45 +85,71 @@ impl AppState {
             return Vec::new();
         }
 
-        let query_chars: Vec<char> = self.search_query.to_lowercase().chars().collect();
+        let query_lower = self.search_query.to_ascii_lowercase();
+        let query_chars: Vec<char> = query_lower.chars().collect();
 
-        let results: Vec<_> = self
-            .model
-            .all_apps
-            .iter()
-            .filter(|app| {
-                let app_name = app.name.to_lowercase();
-                let app_chars: Vec<char> = app_name.chars().collect();
+        let mut matches: Vec<(&App, f32)> = Vec::new();
 
-                // Check if query characters appear in order
-                let mut query_index = 0;
+        for app in &self.model.all_apps {
+            let app_name_lower = app.name.to_ascii_lowercase();
+            let app_chars: Vec<char> = app_name_lower.chars().collect();
 
-                for app_char in app_chars {
-                    if query_index < query_chars.len() && app_char == query_chars[query_index] {
-                        query_index += 1;
-                    }
+            // Find subsequence positions
+            let mut positions = Vec::new();
+            let mut app_idx = 0;
+            let mut found_all = true;
+
+            for &query_char in &query_chars {
+                // Find next occurrence of query_char in app_chars starting from app_idx
+                while app_idx < app_chars.len() && app_chars[app_idx] != query_char {
+                    app_idx += 1;
                 }
 
-                // All query characters must be found in order
-                let matches = query_index == query_chars.len();
+                if app_idx >= app_chars.len() {
+                    found_all = false;
+                    break;
+                }
 
-                // if matches {
-                //     logs::log_info(&format!(
-                //         "Fuzzy match: '{}' matches '{}'",
-                //         self.search_query, app.name
-                //     ));
-                // }
+                positions.push(app_idx);
+                app_idx += 1; // Move past this match for next search
+            }
 
-                matches
-            })
-            .collect();
+            if !found_all {
+                continue; // Skip if not all query characters found in order
+            }
 
-        // logs::log_info(&format!(
-        //     "Query '{}' found {} apps",
-        //     self.search_query,
-        //     results.len()
-        // ));
-        results
+            // Calculate score
+            let mut score = 0.0f32;
+
+            // Base score: prefer shorter names but give substantial base points
+            score += 1000.0 / (app.name.len() as f32).max(1.0);
+
+            // Character proximity bonus - closer characters get higher score (most important)
+            if positions.len() > 1 {
+                let total_span = positions.last().unwrap() - positions.first().unwrap() + 1;
+                score += 1000.0 / (total_span as f32).max(1.0);
+            }
+
+            // Consecutive character bonus
+            let mut consecutive_count = 0;
+            for window in positions.windows(2) {
+                if window[1] - window[0] == 1 {
+                    consecutive_count += 1;
+                }
+            }
+            score += consecutive_count as f32 * 200.0;
+
+            // Early match bonus - matches earlier in the string get small bonus
+            let first_match_pos = positions[0];
+            score += 50.0 / (first_match_pos as f32 + 1.0);
+
+            matches.push((app, score));
+        }
+
+        // Sort by score (highest first)
+        matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        matches.into_iter().map(|(app, _)| app).collect()
     }
 }
 
@@ -239,12 +265,7 @@ fn view(state: &AppState) -> Element<'_, Message> {
         .map(|(index, app)| {
             let is_selected = index == state.selected_index;
 
-            let icon = if let Some(icon_path) = &app.icon {
-                iced::widget::image::Handle::from_path(icon_path)
-            } else {
-                state.generate_fallback_icon(&app.name)
-            };
-
+            let icon = load_app_icon(app);
             let icon_widget = image(icon).width(48).height(48);
 
             let app_name = text(&app.name)
@@ -342,51 +363,218 @@ fn view(state: &AppState) -> Element<'_, Message> {
         .into()
 }
 
-impl AppState {
-    // fn load_or_generate_icon(&self, app: &crate::model::App) -> iced::widget::image::Handle {
-    //     // Try to load real icon first using iced's built-in loading
-    //     if let Some(icon_path) = &app.icon {
-    //         // Use iced's from_path method for direct file loading
-    //         return iced::widget::image::Handle::from_path(icon_path);
-    //     }
+/// Simplified icon loading - uses the icon path resolved by the model or generates fallback
+fn load_app_icon(app: &App) -> iced::widget::image::Handle {
+    // Try to load the icon path that was resolved by the model
+    if let Some(icon_path) = &app.icon {
+        if let Ok(handle) = load_icon_from_path(icon_path) {
+            return handle;
+        }
+    }
 
-    //     // Fallback to generated icon
-    //     self.generate_fallback_icon(&app.name)
-    // }
+    // Fallback to generated icon if no icon path or loading failed
+    generate_fallback_icon(&app.name)
+}
 
-    fn generate_fallback_icon(&self, app_name: &str) -> iced::widget::image::Handle {
-        // Create a deterministic but random-looking 48x48 icon based on app name
-        let base_seed = app_name.chars().map(|c| c as u64).sum::<u64>();
-        let mut img = ImageBuffer::new(48, 48);
+/// Load icon from the path resolved by the model
+#[cfg(target_os = "macos")]
+fn load_icon_from_path(
+    icon_path: &str,
+) -> Result<iced::widget::image::Handle, Box<dyn std::error::Error>> {
+    use icns::{IconFamily, IconType};
+    use std::fs::File;
 
-        // Generate a simple pixelated pattern
-        for y in 0..48 {
-            for x in 0..48 {
-                // Create blocks of 6x6 pixels for pixelated effect
-                let block_x = x / 6;
-                let block_y = y / 6;
-                let block_seed = block_x * 8 + block_y;
+    let file = File::open(icon_path)?;
+    let icon_family = IconFamily::read(file)?;
 
-                let mut block_rng = ChaCha8Rng::seed_from_u64(base_seed + block_seed as u64);
+    // Try multiple sizes in preference order
+    let icon_types = [
+        IconType::RGBA32_64x64,
+        IconType::RGBA32_32x32,
+        IconType::RGBA32_128x128,
+        IconType::RGBA32_16x16,
+    ];
 
-                let intensity = if block_rng.r#gen::<f32>() > 0.5 {
-                    200u8
-                } else {
-                    50u8
-                };
-                let color = [intensity, intensity, intensity];
+    for &icon_type in &icon_types {
+        if let Ok(image) = icon_family.get_icon_with_type(icon_type) {
+            let rgba_data = image.data();
+            let (width, height) = match icon_type {
+                IconType::RGBA32_16x16 => (16, 16),
+                IconType::RGBA32_32x32 => (32, 32),
+                IconType::RGBA32_64x64 => (64, 64),
+                IconType::RGBA32_128x128 => (128, 128),
+                _ => continue,
+            };
 
-                img.put_pixel(x, y, Rgb(color));
+            if let Ok(png_bytes) = rgba_to_png(rgba_data, width, height) {
+                return Ok(iced::widget::image::Handle::from_bytes(png_bytes));
             }
         }
+    }
 
-        // Convert to bytes
-        let mut bytes = Vec::new();
-        let encoder = PngEncoder::new(&mut bytes);
-        img.write_with_encoder(encoder).unwrap_or_else(|_| {
-            logs::log_error("Failed to encode generated icon");
-        });
+    Err("No suitable icon size found".into())
+}
 
-        iced::widget::image::Handle::from_bytes(bytes)
+#[cfg(target_os = "linux")]
+fn load_icon_from_path(
+    icon_path: &str,
+) -> Result<iced::widget::image::Handle, Box<dyn std::error::Error>> {
+    use std::fs;
+
+    let icon_data = fs::read(icon_path)?;
+    Ok(iced::widget::image::Handle::from_bytes(icon_data))
+}
+
+#[cfg(target_os = "windows")]
+fn load_icon_from_path(
+    _icon_path: &str,
+) -> Result<iced::widget::image::Handle, Box<dyn std::error::Error>> {
+    Err("Windows icon loading not implemented".into())
+}
+
+/// Helper function to convert RGBA data to PNG bytes
+fn rgba_to_png(
+    rgba_data: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use ::image::{ImageBuffer, Rgba, codecs::png::PngEncoder};
+
+    // Create image buffer from RGBA data
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        ImageBuffer::from_raw(width, height, rgba_data.to_vec())
+            .ok_or("Failed to create image buffer from RGBA data")?;
+
+    // Encode as PNG
+    let mut png_bytes = Vec::new();
+    let encoder = PngEncoder::new(&mut png_bytes);
+    img.write_with_encoder(encoder)?;
+
+    Ok(png_bytes)
+}
+
+/// Generate a deterministic fallback icon for apps without icons
+fn generate_fallback_icon(app_name: &str) -> iced::widget::image::Handle {
+    // Create a deterministic but random-looking 48x48 icon based on app name
+    let base_seed = app_name.chars().map(|c| c as u64).sum::<u64>();
+    let mut img = ImageBuffer::new(64, 64);
+
+    // Generate a simple pixelated pattern
+    for y in 0..64 {
+        for x in 0..64 {
+            // Create blocks of 8x8 pixels for pixelated effect
+            let block_x = x / 8;
+            let block_y = y / 8;
+            let block_seed = block_x * 8 + block_y;
+
+            let mut block_rng = ChaCha8Rng::seed_from_u64(base_seed + block_seed as u64);
+
+            let intensity = if block_rng.r#gen::<f32>() > 0.5 {
+                200u8
+            } else {
+                50u8
+            };
+            let color = [intensity, intensity, intensity];
+
+            img.put_pixel(x, y, Rgb(color));
+        }
+    }
+
+    // Convert to bytes
+    let mut bytes = Vec::new();
+    let encoder = PngEncoder::new(&mut bytes);
+    img.write_with_encoder(encoder).unwrap_or_else(|_| {
+        logs::log_error("Failed to encode generated icon");
+    });
+
+    iced::widget::image::Handle::from_bytes(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn create_test_app(name: &str, path: &str) -> App {
+        App {
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            description: None,
+            icon: None,
+        }
+    }
+
+    fn create_test_state(apps: Vec<App>, query: &str) -> AppState {
+        let model = AppModel {
+            all_apps: apps,
+            ui_visible: false,
+        };
+        let mut state = AppState::new(model);
+        state.search_query = query.to_string();
+        state
+    }
+
+    #[test]
+    fn test_basic_matching() {
+        let apps = vec![
+            create_test_app("firefox", "/usr/bin/firefox"),
+            create_test_app("photogravure", "/usr/bin/photogravure"),
+            create_test_app("gimp", "/usr/bin/gimp"),
+            create_test_app("gnome-video", "/usr/bin/gnome-video"),
+        ];
+
+        let state = create_test_state(apps, "gv");
+        let results = state.filtered_apps();
+
+        // Should have exactly 2 results: photogravure first, then gnome-video
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].name, "photogravure");
+        assert_eq!(results[1].name, "gnome-video");
+    }
+
+    #[test]
+    fn test_case_insensitive() {
+        let apps = vec![
+            create_test_app("Firefox", "/usr/bin/Firefox"),
+            create_test_app("GIMP", "/usr/bin/GIMP"),
+        ];
+
+        let state = create_test_state(apps.clone(), "fox");
+        let results = state.filtered_apps();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Firefox");
+
+        let state = create_test_state(apps, "GIM");
+        let results = state.filtered_apps();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "GIMP");
+    }
+
+    #[test]
+    fn test_empty_query() {
+        let apps = vec![
+            create_test_app("firefox", "/usr/bin/firefox"),
+            create_test_app("gimp", "/usr/bin/gimp"),
+        ];
+
+        let state = create_test_state(apps, "");
+        let results = state.filtered_apps();
+        assert_eq!(results.len(), 0); // Empty query returns no results
+    }
+
+    #[test]
+    fn test_no_matches() {
+        let apps = vec![
+            create_test_app("firefox", "/usr/bin/firefox"),
+            create_test_app("photogravure", "/usr/bin/photogravure"),
+            create_test_app("gimp", "/usr/bin/gimp"),
+            create_test_app("gnome-video", "/usr/bin/gnome-video"),
+        ];
+
+        let state = create_test_state(apps, "xyz");
+        let results = state.filtered_apps();
+
+        // Should have no results as no app contains x, y, z in sequence
+        assert_eq!(results.len(), 0);
     }
 }

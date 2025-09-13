@@ -1,0 +1,95 @@
+LaunchDock - Cross-platform Application Launcher
+Copyright (C) 2025 QA3 Technologies LLC
+
+DUAL LICENSE NOTICE
+===================
+
+This software is dual-licensed under the terms set forth below. You may choose 
+to use this software under either license depending on your use case.
+
+LICENSE OPTION 1: GNU GENERAL PUBLIC LICENSE (GPL-3.0)
+=======================================================
+
+For open source projects and non-commercial use, this software is licensed 
+under the GNU General Public License version 3.0 (GPL-3.0).
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+LICENSE OPTION 2: COMMERCIAL LICENSE
+====================================
+
+For commercial use, including but not limited to:
+- Integration into proprietary software products
+- Use in commercial applications without GPL compliance
+- Distribution in closed-source products
+- Commercial redistribution without source code disclosure
+
+A separate commercial license is required. Commercial licenses include:
+- Right to use in commercial products
+- No requirement to disclose source code
+- No GPL compliance obligations
+- Commercial support options
+- Indemnification protection
+
+To obtain a commercial license, contact:
+Email: contact@qa3.tech
+Company: QA3 Technologies LLC
+
+ATTRIBUTION REQUIREMENT
+=======================
+
+Regardless of the license chosen, all derivative works MUST include appropriate 
+attribution to QA3 Technologies LLC and the original LaunchDock project.
+
+Minimum attribution requirements:
+- Credit to "QA3 Technologies LLC" and "LaunchDock"
+- Link to the original project repository (if distributed electronically)
+- Notice of any modifications made to the original software
+
+LICENSING DETERMINATION
+======================
+
+- If you are developing open source software under a GPL-compatible license 
+  and can comply with GPL-3.0 terms, you may use this software under GPL-3.0.
+
+- If you cannot comply with GPL-3.0 terms (e.g., you want to create proprietary 
+  software, cannot disclose source code, or need commercial distribution rights), 
+  you must obtain a commercial license.
+
+- When in doubt about licensing requirements, contact contact@qa3.tech for 
+  clarification.
+
+DISCLAIMER
+==========
+
+THIS SOFTWARE IS PROVIDED BY QA3 TECHNOLOGIES LLC "AS IS" AND ANY EXPRESS OR 
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF 
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT 
+SHALL QA3 TECHNOLOGIES LLC BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, 
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, 
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR 
+BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING 
+IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY 
+OF SUCH DAMAGE.
+
+CONTACT INFORMATION
+==================
+
+QA3 Technologies LLC
+Email: contact@qa3.tech
+Website: https://qa3.tech
+
+For licensing inquiries, technical support, or other questions, please contact 
+us using the above information.

@@ -85,9 +85,153 @@ pub fn discover_apps() -> Vec<App> {
         }
     }
 
+    resolve_app_icons(&mut apps);
+
     apps.sort_by(|a, b| a.name.cmp(&b.name));
     logs::log_info(&format!("Found {} applications", apps.len()));
     apps
+}
+
+/// resolves the best available icon for each app
+fn resolve_app_icons(apps: &mut [App]) {
+    for app in apps.iter_mut() {
+        if app.icon.is_none() || !icon_path_exists(&app.icon) {
+            app.icon = discover_comprehensive_icon(&app.path, &app.name);
+        }
+    }
+}
+
+/// Check if the current icon path actually exists
+fn icon_path_exists(icon_path: &Option<String>) -> bool {
+    icon_path
+        .as_ref()
+        .map(|path| PathBuf::from(path).exists())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<String> {
+    // Only process .app bundles for comprehensive search
+    if app_path.extension().and_then(|s| s.to_str()) != Some("app") {
+        return None;
+    }
+
+    let resources_path = app_path.join("Contents/Resources");
+    if !resources_path.exists() {
+        return None;
+    }
+
+    let capitalize_first_letter = |s: &str| -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    };
+
+    // Try standard and app-name-based icon locations in order of preference
+    let icon_patterns = vec![
+        "AppIcon.icns".to_string(),
+        format!("{}.icns", app_name),
+        format!("{}.icns", app_name.to_lowercase()),
+        "app.icns".to_string(),
+        "icon.icns".to_string(),
+        // Additional common variations
+        format!("{}.icns", app_name.to_uppercase()),
+        format!("{}.icns", capitalize_first_letter(app_name)),
+    ];
+
+    for pattern in icon_patterns {
+        let candidate_path = resources_path.join(&pattern);
+        if candidate_path.exists() {
+            return Some(candidate_path.to_string_lossy().to_string());
+        }
+    }
+
+    // Search for any .icns file in Resources directory
+    if let Ok(entries) = fs::read_dir(&resources_path) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("icns") {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Last resort: check Info.plist for CFBundleIconFile
+    let info_plist_path = app_path.join("Contents/Info.plist");
+    if info_plist_path.exists() {
+        if let Ok(content) = fs::read_to_string(&info_plist_path) {
+            if let Some(icon_name) = extract_bundle_icon_name(&content) {
+                let icon_path = resources_path.join(format!("{}.icns", icon_name.trim()));
+                if icon_path.exists() {
+                    return Some(icon_path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn extract_bundle_icon_name(plist_content: &str) -> Option<String> {
+    // Simple string search for icon file (not a full plist parser)
+    if let Some(start) = plist_content.find("<key>CFBundleIconFile</key>") {
+        if let Some(string_start) = plist_content[start..].find("<string>") {
+            let string_content_start = start + string_start + 8;
+            if let Some(string_end) = plist_content[string_content_start..].find("</string>") {
+                let icon_name =
+                    &plist_content[string_content_start..string_content_start + string_end];
+                return Some(icon_name.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<String> {
+    // Linux icon discovery - check standard icon theme directories
+    let icon_theme_paths = vec![
+        "/usr/share/icons/hicolor/48x48/apps/",
+        "/usr/share/icons/hicolor/64x64/apps/",
+        "/usr/share/icons/hicolor/128x128/apps/",
+        "/usr/share/pixmaps/",
+        &format!(
+            "/home/{}/.local/share/icons/hicolor/48x48/apps/",
+            get_username()
+        ),
+    ];
+
+    let icon_extensions = vec!["png", "svg", "xpm"];
+
+    for theme_path in icon_theme_paths {
+        for ext in &icon_extensions {
+            let icon_path =
+                PathBuf::from(theme_path).join(format!("{}.{}", app_name.to_lowercase(), ext));
+            if icon_path.exists() {
+                return Some(icon_path.to_string_lossy().to_string());
+            }
+
+            // Try without extension changes
+            let icon_path = PathBuf::from(theme_path).join(format!("{}.{}", app_name, ext));
+            if icon_path.exists() {
+                return Some(icon_path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn discover_comprehensive_icon(app_path: &PathBuf, _app_name: &str) -> Option<String> {
+    // Windows icon extraction would require complex Windows API calls
+    // For now, return None and let the view handle fallback generation
+
+    // TODO: Implement proper icon extraction from .exe files
+    None
 }
 
 fn get_app_paths() -> Vec<String> {
@@ -157,7 +301,7 @@ fn get_app_icon(path: &PathBuf) -> Option<String> {
     match std::env::consts::OS {
         "macos" => get_macos_app_icon(path),
         // "windows" => get_windows_app_icon(path),
-        _ => None, // Linux icons are handled via desktop entries
+        _ => None, // Linux icons are handled via desktop entries and comprehensive discovery
     }
 }
 
@@ -167,65 +311,14 @@ fn get_macos_app_icon(app_path: &PathBuf) -> Option<String> {
         return None;
     }
 
-    // First, try the standard AppIcon.icns location
+    // Try the standard AppIcon.icns location first
     let standard_icon_path = app_path.join("Contents/Resources/AppIcon.icns");
     if standard_icon_path.exists() {
         return Some(standard_icon_path.to_string_lossy().to_string());
     }
 
-    // Fallback: look for any .icns file in Resources directory
-    let resources_dir = app_path.join("Contents/Resources");
-    if let Ok(entries) = fs::read_dir(resources_dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("icns") {
-                return Some(path.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    // Last resort: check Info.plist for CFBundleIconFile
-    let info_plist_path = app_path.join("Contents/Info.plist");
-    if info_plist_path.exists() {
-        if let Ok(content) = fs::read_to_string(&info_plist_path) {
-            // Simple string search for icon file (not a full plist parser)
-            if let Some(start) = content.find("<key>CFBundleIconFile</key>") {
-                if let Some(string_start) = content[start..].find("<string>") {
-                    let string_content_start = start + string_start + 8;
-                    if let Some(string_end) = content[string_content_start..].find("</string>") {
-                        let icon_name =
-                            &content[string_content_start..string_content_start + string_end];
-                        let icon_path = app_path
-                            .join("Contents/Resources")
-                            .join(format!("{}.icns", icon_name.trim()));
-                        if icon_path.exists() {
-                            return Some(icon_path.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     None
 }
-
-// fn get_windows_app_icon(app_path: &PathBuf) -> Option<String> {
-//     // For Windows applications, we don't extract embedded icons from .exe files
-//     // since this requires complex Windows API calls to ExtractIconEx or similar.
-//     //
-//     // Extracting icons would involve:
-//     // 1. Loading the .exe/.dll as a resource
-//     // 2. Calling ExtractIconEx to get icon handles
-//     // 3. Converting icon handles to bitmap data
-//     // 4. Saving as temporary .ico files that Iced can load
-//     //
-//     // For now, we return None and let the view handle missing icons gracefully
-//     // without showing placeholder icons.
-//     //
-//     // Future enhancement: Implement proper icon extraction and caching
-//     None
-// }
 
 fn is_app(path: &PathBuf) -> bool {
     match std::env::consts::OS {

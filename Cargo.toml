@@ -22,6 +22,7 @@ chrono = { version = "0.4", features = ["serde"] }
 image = "0.25"
 rand = "0.8"
 rand_chacha = "0.3"
+icns = "0.3.1"
 
 # Platform-specific dependencies for process checking
 [target.'cfg(unix)'.dependencies]

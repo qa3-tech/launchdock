@@ -1,0 +1,83 @@
+LaunchDock Installation Instructions
+====================================
+
+1. EXTRACT AND INSTALL BINARY
+------------------------------
+
+Extract the downloaded archive and copy the `launchdock` binary (or `launchdock.exe` 
+on Windows) to a directory in your system PATH.
+
+Common installation locations:
+- Linux/macOS: /usr/local/bin/ or ~/.local/bin/
+- Windows: C:\Program Files\LaunchDock\ (then add to PATH)
+
+Alternative: Keep the binary anywhere and add its directory to your PATH.
+
+2. START THE DAEMON
+-------------------
+
+Open a terminal/command prompt and run:
+
+    launchdock start
+
+This starts the background daemon that manages application discovery.
+
+3. CONFIGURE STARTUP (RECOMMENDED)
+----------------------------------
+
+Add `launchdock start` to your system startup to run automatically:
+
+- Windows: Add to Startup folder or Task Scheduler
+- macOS: Add to Login Items in System Preferences
+- Linux: Add to your desktop environment's autostart applications
+
+4. SET UP HOTKEYS
+-----------------
+
+Configure a keyboard shortcut in your OS settings to run: launchdock show
+
+Platform-specific instructions:
+- Windows: Settings → System → Keyboard → Advanced keyboard settings → App shortcuts
+- macOS: System Preferences → Keyboard → Shortcuts → App Shortcuts  
+- Linux (GNOME): Settings → Keyboard → Custom Shortcuts
+- Linux (KDE): System Settings → Shortcuts → Custom Shortcuts
+
+Suggested hotkey combinations:
+- Super+Space (recommended)
+- Ctrl+Alt+Space
+- Meta+Escape
+
+5. VERIFY INSTALLATION
+----------------------
+
+Test your setup:
+
+    launchdock status
+
+Should show "Daemon: Running"
+
+Press your configured hotkey - the launcher interface should appear.
+
+6. USAGE
+--------
+
+- Press your hotkey to show the launcher
+- Type to search for applications (fuzzy matching supported)
+- Use arrow keys or numbers (1-7) to select
+- Press Enter to launch, Escape to close
+
+7. TROUBLESHOOTING
+------------------
+
+If the daemon won't start:
+    launchdock logs
+
+If applications don't appear:
+    launchdock stop && launchdock start
+
+For more help, see the project README or visit:
+https://github.com/qa3-tech/launchdock
+
+====================================
+Copyright © 2025 QA3 Technologies LLC
+See LICENSE file for licensing terms.
