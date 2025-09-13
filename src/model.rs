@@ -8,34 +8,11 @@ use std::{
 
 use crate::logs;
 
-const WINDOWS_APP_PATHS: &[&str] = &[
-    "C:\\Program Files\\",
-    "C:\\Program Files (x86)\\",
-    "C:\\Program Files\\WindowsApps\\",
-    "C:\\Users\\{username}\\AppData\\Local\\Programs\\",
-    "C:\\Users\\{username}\\AppData\\Roaming\\",
-    "C:\\Windows\\System32\\",
-    "C:\\Windows\\",
-];
-
 const MACOS_APP_PATHS: &[&str] = &[
     "/Applications/",
     "/Users/{username}/Applications/",
     "/System/Applications/",
     "/System/Library/CoreServices/",
-    "/usr/bin/",
-    "/usr/local/bin/",
-    "/opt/homebrew/bin/",
-];
-
-const LINUX_APP_PATHS: &[&str] = &[
-    "/usr/bin/",
-    "/usr/local/bin/",
-    "/opt/",
-    "/snap/bin/",
-    "/var/lib/flatpak/exports/bin/",
-    "/home/{username}/.local/bin/",
-    "/home/{username}/bin/",
 ];
 
 const LINUX_DESKTOP_ENTRY_PATHS: &[&str] = &[
@@ -101,7 +78,17 @@ pub fn discover_apps() -> Vec<App> {
 fn resolve_app_icons(apps: &mut [App]) {
     for app in apps.iter_mut() {
         if app.icon.is_none() || !icon_path_exists(&app.icon) {
-            app.icon = discover_comprehensive_icon(&app.name);
+            app.icon = {
+                #[cfg(target_os = "linux")]
+                {
+                    discover_comprehensive_icon(&app.name)
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    discover_comprehensive_icon(&app.path, &app.name)
+                }
+            };
         }
     }
 }
@@ -230,22 +217,12 @@ fn discover_comprehensive_icon(app_name: &str) -> Option<String> {
     None
 }
 
-#[cfg(target_os = "windows")]
-fn discover_comprehensive_icon(app_path: &Path, _app_name: &str) -> Option<String> {
-    // Windows icon extraction would require complex Windows API calls
-    // For now, return None and let the view handle fallback generation
-
-    // TODO: Implement proper icon extraction from .exe files
-    None
-}
-
 fn get_app_paths() -> Vec<String> {
     let username = get_username();
 
     let paths = match std::env::consts::OS {
-        "windows" => WINDOWS_APP_PATHS,
         "macos" => MACOS_APP_PATHS,
-        _ => LINUX_APP_PATHS,
+        _ => LINUX_DESKTOP_ENTRY_PATHS,
     };
 
     paths
@@ -305,7 +282,6 @@ fn get_app_name(path: &Path) -> String {
 fn get_app_icon(path: &Path) -> Option<String> {
     match std::env::consts::OS {
         "macos" => get_macos_app_icon(path),
-        // "windows" => get_windows_app_icon(path),
         _ => None, // Linux icons are handled via desktop entries and comprehensive discovery
     }
 }
@@ -327,11 +303,6 @@ fn get_macos_app_icon(app_path: &Path) -> Option<String> {
 
 fn is_app(path: &Path) -> bool {
     match std::env::consts::OS {
-        "windows" => path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("exe"))
-            .unwrap_or(false),
         "macos" => {
             path.extension()
                 .and_then(|ext| ext.to_str())
@@ -441,7 +412,6 @@ fn find_in_path(executable: &str) -> Option<PathBuf> {
 pub fn launch_app(app: &App) {
     logs::log_info(&format!("Launching: {}", app.name));
     let result = match std::env::consts::OS {
-        "windows" => Command::new(&app.path).spawn(),
         "macos" => Command::new("open").arg(&app.path).spawn(),
         _ => Command::new(&app.path).spawn(),
     };
