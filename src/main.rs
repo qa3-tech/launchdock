@@ -86,12 +86,11 @@ fn send_daemon_command(cmd: daemon::DaemonCommand) -> Result<(), Box<dyn std::er
 
     let response = daemon::send_command(cmd)?;
 
-    if !response.success {
-        if let Some(error) = response.error {
+    if !response.success
+        && let Some(error) = response.error {
             eprintln!("Error: {}", error);
             return Err(error.into());
         }
-    }
 
     match response.data {
         Some(daemon::DaemonResponseData::Status { running, visible }) => {

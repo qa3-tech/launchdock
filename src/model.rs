@@ -160,16 +160,14 @@ fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<Str
 
     // Last resort: check Info.plist for CFBundleIconFile
     let info_plist_path = app_path.join("Contents/Info.plist");
-    if info_plist_path.exists() {
-        if let Ok(content) = fs::read_to_string(&info_plist_path) {
-            if let Some(icon_name) = extract_bundle_icon_name(&content) {
+    if info_plist_path.exists()
+        && let Ok(content) = fs::read_to_string(&info_plist_path)
+            && let Some(icon_name) = extract_bundle_icon_name(&content) {
                 let icon_path = resources_path.join(format!("{}.icns", icon_name.trim()));
                 if icon_path.exists() {
                     return Some(icon_path.to_string_lossy().to_string());
                 }
             }
-        }
-    }
 
     None
 }
@@ -177,8 +175,8 @@ fn discover_comprehensive_icon(app_path: &PathBuf, app_name: &str) -> Option<Str
 #[cfg(target_os = "macos")]
 fn extract_bundle_icon_name(plist_content: &str) -> Option<String> {
     // Simple string search for icon file (not a full plist parser)
-    if let Some(start) = plist_content.find("<key>CFBundleIconFile</key>") {
-        if let Some(string_start) = plist_content[start..].find("<string>") {
+    if let Some(start) = plist_content.find("<key>CFBundleIconFile</key>")
+        && let Some(string_start) = plist_content[start..].find("<string>") {
             let string_content_start = start + string_start + 8;
             if let Some(string_end) = plist_content[string_content_start..].find("</string>") {
                 let icon_name =
@@ -186,7 +184,6 @@ fn extract_bundle_icon_name(plist_content: &str) -> Option<String> {
                 return Some(icon_name.to_string());
             }
         }
-    }
     None
 }
 
@@ -365,11 +362,10 @@ fn discover_desktop_entries() -> Vec<App> {
         if let Ok(entries) = fs::read_dir(&path) {
             for entry in entries.filter_map(Result::ok) {
                 let file_path = entry.path();
-                if file_path.extension().and_then(|s| s.to_str()) == Some("desktop") {
-                    if let Some(app) = parse_desktop_entry(&file_path) {
+                if file_path.extension().and_then(|s| s.to_str()) == Some("desktop")
+                    && let Some(app) = parse_desktop_entry(&file_path) {
                         apps.push(app);
                     }
-                }
             }
         }
     }

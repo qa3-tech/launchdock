@@ -71,13 +71,13 @@ struct AppState {
 
 impl AppState {
     fn new(model: AppModel) -> Self {
-        let state = Self {
+        
+        Self {
             model,
             selected_index: 0,
             search_query: String::new(),
             current_filtered_apps: Vec::new(),
-        };
-        state
+        }
     }
 
     pub fn filtered_apps(&self) -> Vec<&App> {
@@ -158,7 +158,7 @@ const DISPLAY_COUNT: usize = 7;
 fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
     match message {
         Message::ForceExit => {
-            return iced::exit(); // Only update can return the exit task
+            iced::exit()// Only update can return the exit task
         }
         Message::InputChanged(value) => {
             state.search_query = value;
@@ -169,12 +169,12 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
         }
         Message::KeyPressed(key) => {
             match key {
-                keyboard::Key::Named(keyboard::key::Named::Escape) => return iced::exit(),
+                keyboard::Key::Named(keyboard::key::Named::Escape) => iced::exit(),
                 keyboard::Key::Named(keyboard::key::Named::Enter) => {
                     if let Some(app) = state.current_filtered_apps.get(state.selected_index) {
                         launch_app(app);
                     }
-                    return iced::exit();
+                    iced::exit()
                 }
                 keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                     if !state.current_filtered_apps.is_empty() {
@@ -196,19 +196,18 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
                 }
                 keyboard::Key::Character(ref c) => {
                     // Handle shortcuts first
-                    if let Ok(num) = c.parse::<usize>() {
-                        if num >= 1 && num <= state.current_filtered_apps.len().min(DISPLAY_COUNT) {
+                    if let Ok(num) = c.parse::<usize>()
+                        && num >= 1 && num <= state.current_filtered_apps.len().min(DISPLAY_COUNT) {
                             let index = num - 1;
                             if let Some(app) = state.current_filtered_apps.get(index) {
                                 launch_app(app);
                                 return iced::exit();
                             }
                         }
-                    }
                     // For non-shortcut characters, treat as search input
                     let mut new_search = state.search_query.clone();
                     new_search.push_str(c);
-                    return update(state, Message::InputChanged(new_search));
+                    update(state, Message::InputChanged(new_search))
                 }
                 _ => iced::Task::none(),
             }
@@ -366,11 +365,10 @@ fn view(state: &AppState) -> Element<'_, Message> {
 /// Simplified icon loading - uses the icon path resolved by the model or generates fallback
 fn load_app_icon(app: &App) -> iced::widget::image::Handle {
     // Try to load the icon path that was resolved by the model
-    if let Some(icon_path) = &app.icon {
-        if let Ok(handle) = load_icon_from_path(icon_path) {
+    if let Some(icon_path) = &app.icon
+        && let Ok(handle) = load_icon_from_path(icon_path) {
             return handle;
         }
-    }
 
     // Fallback to generated icon if no icon path or loading failed
     generate_fallback_icon(&app.name)

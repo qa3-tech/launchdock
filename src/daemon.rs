@@ -163,15 +163,14 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         // Check for UI thread completion
-        if let Some(ref handle) = ui_thread_handle {
-            if handle.is_finished() {
+        if let Some(ref handle) = ui_thread_handle
+            && handle.is_finished() {
                 model.ui_visible = false;
                 if let Some(handle) = ui_thread_handle.take() {
                     let _ = handle.join();
                 }
                 logs::log_info("UI thread closed");
             }
-        }
 
         // Check for incoming connections
         match listener.accept() {
