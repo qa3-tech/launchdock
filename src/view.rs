@@ -71,7 +71,6 @@ struct AppState {
 
 impl AppState {
     fn new(model: AppModel) -> Self {
-        
         Self {
             model,
             selected_index: 0,
@@ -158,7 +157,7 @@ const DISPLAY_COUNT: usize = 7;
 fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
     match message {
         Message::ForceExit => {
-            iced::exit()// Only update can return the exit task
+            iced::exit() // Only update can return the exit task
         }
         Message::InputChanged(value) => {
             state.search_query = value;
@@ -197,13 +196,15 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
                 keyboard::Key::Character(ref c) => {
                     // Handle shortcuts first
                     if let Ok(num) = c.parse::<usize>()
-                        && num >= 1 && num <= state.current_filtered_apps.len().min(DISPLAY_COUNT) {
-                            let index = num - 1;
-                            if let Some(app) = state.current_filtered_apps.get(index) {
-                                launch_app(app);
-                                return iced::exit();
-                            }
+                        && num >= 1
+                        && num <= state.current_filtered_apps.len().min(DISPLAY_COUNT)
+                    {
+                        let index = num - 1;
+                        if let Some(app) = state.current_filtered_apps.get(index) {
+                            launch_app(app);
+                            return iced::exit();
                         }
+                    }
                     // For non-shortcut characters, treat as search input
                     let mut new_search = state.search_query.clone();
                     new_search.push_str(c);
@@ -366,9 +367,10 @@ fn view(state: &AppState) -> Element<'_, Message> {
 fn load_app_icon(app: &App) -> iced::widget::image::Handle {
     // Try to load the icon path that was resolved by the model
     if let Some(icon_path) = &app.icon
-        && let Ok(handle) = load_icon_from_path(icon_path) {
-            return handle;
-        }
+        && let Ok(handle) = load_icon_from_path(icon_path)
+    {
+        return handle;
+    }
 
     // Fallback to generated icon if no icon path or loading failed
     generate_fallback_icon(&app.name)

@@ -53,18 +53,19 @@ fn write_log(level: &str, msg: &str) {
 
     // Check file size and warn if over 5 MiB (simple check, no mutex needed)
     if let Ok(size) = metadata(&log_file).map(|m| m.len())
-        && size > 5 * 1024 * 1024 {
-            let warning = format!(
-                "[{}] WARN: Log file is {:.1} MiB. Consider running 'launchdock logs clear'\n",
-                timestamp,
-                size as f64 / 1_048_576.0
-            );
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file)
-                .and_then(|mut file| file.write_all(warning.as_bytes()));
-        }
+        && size > 5 * 1024 * 1024
+    {
+        let warning = format!(
+            "[{}] WARN: Log file is {:.1} MiB. Consider running 'launchdock logs clear'\n",
+            timestamp,
+            size as f64 / 1_048_576.0
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)
+            .and_then(|mut file| file.write_all(warning.as_bytes()));
+    }
 }
 
 pub fn handle_logs_command(action: Option<LogsAction>) -> Result<(), Box<dyn std::error::Error>> {
