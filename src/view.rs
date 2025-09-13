@@ -39,14 +39,8 @@ pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
             },
             #[cfg(target_os = "linux")]
             platform_specific: window::settings::PlatformSpecific {
-                skip_taskbar: true,
-                titlebar_transparent: true,
-                fullsize_content_view: false,
-            },
-            #[cfg(target_os = "windows")]
-            platform_specific: window::settings::PlatformSpecific {
-                skip_taskbar: true,
-                undecorated_shadow: false,
+                application_id: "launchdock".to_string(),
+                override_redirect: false,
             },
             ..Default::default()
         })
@@ -425,14 +419,9 @@ fn load_icon_from_path(
     Ok(iced::widget::image::Handle::from_bytes(icon_data))
 }
 
-#[cfg(target_os = "windows")]
-fn load_icon_from_path(
-    _icon_path: &str,
-) -> Result<iced::widget::image::Handle, Box<dyn std::error::Error>> {
-    Err("Windows icon loading not implemented".into())
-}
 
 /// Helper function to convert RGBA data to PNG bytes
+#[cfg(target_os = "macos")]
 fn rgba_to_png(
     rgba_data: &[u8],
     width: u32,

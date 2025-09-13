@@ -34,13 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Start => handle_start(),
         Commands::Stop => send_daemon_command(daemon::DaemonCommand::Stop),
-        Commands::Show => {
-            if std::env::consts::OS == "macos" {
-                handle_show_macos()
-            } else {
-                send_daemon_command(daemon::DaemonCommand::Show)
-            }
-        }
+        Commands::Show => handle_show(),
         Commands::Hide => send_daemon_command(daemon::DaemonCommand::Hide),
         Commands::Status => send_daemon_command(daemon::DaemonCommand::Status),
         Commands::Logs { action } => {
@@ -113,21 +107,39 @@ fn is_daemon_process() -> bool {
         // Check if stdin is a terminal
         unsafe { libc::isatty(0) == 0 }
     }
-
-    #[cfg(windows)]
-    {
-        // On Windows, check if we have a console window
-        use winapi::um::wincon::GetConsoleWindow;
-        unsafe { GetConsoleWindow().is_null() }
-    }
 }
 
-fn handle_show_macos() -> Result<(), Box<dyn std::error::Error>> {
-    logs::log_info("Starting UI process");
+fn handle_show() -> Result<(), Box<dyn std::error::Error>> {
+    let status_response = daemon::send_command(daemon::DaemonCommand::Status);
 
+    match status_response {
+        Ok(response) if response.success => {
+            match response.data {
+                Some(daemon::DaemonResponseData::Status { visible: true, .. }) => {
+                    println!("UI is already visible");
+                    return Ok(());
+                }
+                Some(daemon::DaemonResponseData::Status { visible: false, .. }) => {
+                    // Continue - daemon running but UI not visible
+                }
+                _ => return Err("Unexpected daemon response".into()),
+            }
+        }
+        _ => {
+            println!("LaunchDock is not running. Use 'launchdock start' to start it.");
+            return Ok(());
+        }
+    }
+
+    // This call is unnecessary but kept to maintain consistency with daemon command pattern
+    let show_response = daemon::send_command(daemon::DaemonCommand::Show)?;
+
+    let daemon::DaemonResponseData::Status { visible, .. } = show_response.data.unwrap();
+
+    logs::log_info("Starting UI process");
     let mut model = model::AppModel {
         all_apps: model::discover_apps(),
-        ui_visible: true,
+        ui_visible: visible,
     };
 
     let final_model = view::run_ui(model.clone())?;

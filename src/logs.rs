@@ -127,7 +127,7 @@ fn get_log_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
     #[cfg(target_os = "linux")]
     let base = std::env::var("XDG_DATA_HOME")
-        .or_else(|_| Ok(format!("{}/.local/share", std::env::var("HOME")?)))?;
+        .or_else(|_| std::env::var("HOME").map(|home| format!("{}/.local/share", home)))?;
 
     Ok(PathBuf::from(base)
         .join("launchdock")

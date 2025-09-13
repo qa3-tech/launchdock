@@ -101,7 +101,7 @@ pub fn discover_apps() -> Vec<App> {
 fn resolve_app_icons(apps: &mut [App]) {
     for app in apps.iter_mut() {
         if app.icon.is_none() || !icon_path_exists(&app.icon) {
-            app.icon = discover_comprehensive_icon(&app.path, &app.name);
+            app.icon = discover_comprehensive_icon(&app.name);
         }
     }
 }
@@ -194,17 +194,19 @@ fn extract_bundle_icon_name(plist_content: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_comprehensive_icon(app_path: &Path, app_name: &str) -> Option<String> {
+fn discover_comprehensive_icon(app_name: &str) -> Option<String> {
+    let user_icons_path = format!(
+        "/home/{}/.local/share/icons/hicolor/48x48/apps/",
+        get_username()
+    );
+
     // Linux icon discovery - check standard icon theme directories
     let icon_theme_paths = vec![
         "/usr/share/icons/hicolor/48x48/apps/",
         "/usr/share/icons/hicolor/64x64/apps/",
         "/usr/share/icons/hicolor/128x128/apps/",
         "/usr/share/pixmaps/",
-        &format!(
-            "/home/{}/.local/share/icons/hicolor/48x48/apps/",
-            get_username()
-        ),
+        &user_icons_path,
     ];
 
     let icon_extensions = vec!["png", "svg", "xpm"];

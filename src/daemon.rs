@@ -13,7 +13,6 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use crate::{
     logs,
     model::{AppModel, discover_apps},
-    view::run_ui,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -104,23 +103,6 @@ fn is_process_running(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-#[cfg(windows)]
-fn is_process_running(pid: u32) -> bool {
-    use winapi::um::{
-        handleapi::CloseHandle, processthreadsapi::OpenProcess, winnt::PROCESS_QUERY_INFORMATION,
-    };
-
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid);
-        if handle.is_null() {
-            false
-        } else {
-            CloseHandle(handle);
-            true
-        }
-    }
-}
-
 pub fn send_command(cmd: DaemonCommand) -> Result<DaemonResponse, Box<dyn std::error::Error>> {
     let mut stream = UnixStream::connect(socket_path())?;
     let data = serde_json::to_vec(&cmd)?;
@@ -175,8 +157,7 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         // Check for incoming connections
         match listener.accept() {
             Ok((mut stream, _)) => {
-                let (response, should_stop) =
-                    handle_client_connection(&mut stream, &mut model, &mut ui_thread_handle);
+                let (response, should_stop) = handle_client_connection(&mut stream, &mut model);
 
                 let response_data = serde_json::to_vec(&response)?;
                 let _ = stream.write_all(&response_data);
@@ -204,7 +185,6 @@ pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 fn handle_client_connection(
     stream: &mut UnixStream,
     model: &mut AppModel,
-    ui_thread_handle: &mut Option<thread::JoinHandle<()>>,
 ) -> (DaemonResponse, bool) {
     let mut buffer = vec![0; 1024];
 
@@ -230,57 +210,17 @@ fn handle_client_connection(
 
     match cmd {
         DaemonCommand::Show => {
-            if model.ui_visible {
-                logs::log_info("UI already visible");
-                return (DaemonResponse::ok(), false);
-            }
-
-            // Clean up any previous UI thread
-            if let Some(handle) = ui_thread_handle.take() {
-                let _ = handle.join();
-            }
-
-            // Clone model for the UI thread
-            let ui_model = model.clone();
-
-            // Spawn UI thread
-            let handle = thread::spawn(move || {
-                logs::log_info("Starting UI thread");
-
-                // Check if we're on main thread (macOS requirement)
-                logs::log_info(&format!("UI thread ID: {:?}", thread::current().id()));
-                logs::log_info(&format!(
-                    "Is main thread: {}",
-                    thread::current().name() == Some("main")
-                ));
-
-                // Set panic hook to catch UI framework panics
-                let original_hook = std::panic::take_hook();
-                std::panic::set_hook(Box::new(|panic_info| {
-                    logs::log_error(&format!("UI thread panic: {}", panic_info));
-                }));
-
-                let result = std::panic::catch_unwind(|| {
-                    if let Err(e) = run_ui(ui_model) {
-                        logs::log_error(&format!("UI error: {}", e));
-                    }
-                });
-
-                // Restore original panic hook
-                std::panic::set_hook(original_hook);
-
-                if let Err(e) = result {
-                    logs::log_error(&format!("UI thread panicked: {:?}", e));
-                }
-
-                logs::log_info("UI thread ending");
-            });
-
-            *ui_thread_handle = Some(handle);
+            // At this point we know daemon is running and UI was not visible
             model.ui_visible = true;
 
-            logs::log_info("UI show request processed");
-            (DaemonResponse::ok(), false)
+            // Return updated status
+            (
+                DaemonResponse::ok_with_data(DaemonResponseData::Status {
+                    running: true,
+                    visible: true,
+                }),
+                false,
+            )
         }
 
         DaemonCommand::Hide => {
