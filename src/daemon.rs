@@ -18,7 +18,6 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum DaemonCommand {
     Show,
-    Hide,
     Stop,
     Status,
 }
@@ -36,7 +35,8 @@ pub enum DaemonResponseData {
 }
 
 impl DaemonResponse {
-    pub fn ok() -> Self {
+  #[allow(dead_code)]  
+  pub fn ok() -> Self {
         Self {
             success: true,
             error: None,
@@ -213,7 +213,6 @@ fn handle_client_connection(
             // At this point we know daemon is running and UI was not visible
             model.ui_visible = true;
 
-            // Return updated status
             (
                 DaemonResponse::ok_with_data(DaemonResponseData::Status {
                     running: true,
@@ -221,11 +220,6 @@ fn handle_client_connection(
                 }),
                 false,
             )
-        }
-
-        DaemonCommand::Hide => {
-            logs::log_info("Hide requested - close UI with ESC key or window close");
-            (DaemonResponse::ok(), false)
         }
 
         DaemonCommand::Status => (

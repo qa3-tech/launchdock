@@ -79,9 +79,8 @@ launchdock status
 launchdock start
 launchdock stop
 
-# Show/hide the launcher
+# Show the launcher
 launchdock show
-launchdock hide
 
 # Check status
 launchdock status
@@ -116,12 +115,6 @@ LaunchDock uses intelligent fuzzy search that matches characters in order but no
 This means typing `psg` will find "Photoshop Graphics" before "Photo Studio Gallery" because the characters are closer together.
 
 ## Platform Support
-
-### Windows
-
-- Scans Program Files, Start Menu, and user application directories
-- Supports `.exe` applications
-- Future: Icon extraction from executables
 
 ### Linux
 
@@ -206,7 +199,6 @@ launchdock stop && launchdock start
 
 ### Platform-Specific
 
-**Windows**: Run as administrator if system directory scanning fails
 **Linux**: Ensure desktop entries are properly installed
 **macOS**: Grant permissions in System Preferences → Security & Privacy if needed
 

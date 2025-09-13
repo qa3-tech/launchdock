@@ -18,7 +18,6 @@ enum Commands {
     Start,
     Stop,
     Show,
-    Hide,
     Status,
     Logs {
         #[command(subcommand)]
@@ -35,7 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Start => handle_start(),
         Commands::Stop => send_daemon_command(daemon::DaemonCommand::Stop),
         Commands::Show => handle_show(),
-        Commands::Hide => send_daemon_command(daemon::DaemonCommand::Hide),
         Commands::Status => send_daemon_command(daemon::DaemonCommand::Status),
         Commands::Logs { action } => {
             logs::handle_logs_command(action)?;
