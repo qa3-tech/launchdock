@@ -169,9 +169,7 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          find artifacts -name "*.tar.gz" -o -name "*.zip" | while read file; do
-            cp "$file" release-assets/
-          done
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-assets/ \;
           ls -la release-assets/
 
       - name: Create Release
