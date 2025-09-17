@@ -2,22 +2,21 @@ use ::image::{ImageBuffer, Rgb, codecs::png::PngEncoder};
 use iced::{
     Alignment, Background, Color, Element, Length, Padding, Size,
     daemon::Appearance,
-    keyboard,
-    widget::{column, container, image, row, scrollable, text, text_input},
+    keyboard::{self},
+    widget::{column, container, image, row, scrollable, text},
     window,
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use std::process::Command;
 
-use crate::{
-    logs,
-    model::{App, AppModel, launch_app},
-};
+use crate::apps::{self, AppInfo};
 
-pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
+use crate::logs;
+
+pub fn run_ui(all_apps: Vec<AppInfo>) -> Result<(), Box<dyn std::error::Error>> {
     iced::application("launchdock", update, view)
         .subscription(subscription)
-        .transparent(true)
         .style(|_, _| Appearance {
             background_color: iced::Color::TRANSPARENT,
             text_color: iced::Color::WHITE,
@@ -44,36 +43,36 @@ pub fn run_ui(model: AppModel) -> Result<AppModel, Box<dyn std::error::Error>> {
             },
             ..Default::default()
         })
-        .run_with(move || (AppState::new(model), iced::Task::none()))?;
+        .run_with(move || (AppState::new(all_apps), iced::Task::none()))?;
 
-    Ok(AppModel::default())
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     InputChanged(String),
-    KeyPressed(keyboard::Key),
-    ForceExit,
+    KeyPressed(keyboard::Key, keyboard::Modifiers),
+    IgnoreEvent,
 }
 
 struct AppState {
-    model: AppModel,
+    all_apps: Vec<AppInfo>,
     search_query: String,
     selected_index: usize,
-    current_filtered_apps: Vec<App>,
+    current_filtered_apps: Vec<AppInfo>,
 }
 
 impl AppState {
-    fn new(model: AppModel) -> Self {
+    fn new(all_apps: Vec<AppInfo>) -> Self {
         Self {
-            model,
+            all_apps,
             selected_index: 0,
             search_query: String::new(),
             current_filtered_apps: Vec::new(),
         }
     }
 
-    pub fn filtered_apps(&self) -> Vec<&App> {
+    pub fn filtered_apps(&self) -> Vec<&AppInfo> {
         if self.search_query.is_empty() {
             return Vec::new();
         }
@@ -81,9 +80,9 @@ impl AppState {
         let query_lower = self.search_query.to_ascii_lowercase();
         let query_chars: Vec<char> = query_lower.chars().collect();
 
-        let mut matches: Vec<(&App, f32)> = Vec::new();
+        let mut matches: Vec<(&AppInfo, f32)> = Vec::new();
 
-        for app in &self.model.all_apps {
+        for app in &self.all_apps {
             let app_name_lower = app.name.to_ascii_lowercase();
             let app_chars: Vec<char> = app_name_lower.chars().collect();
 
@@ -150,9 +149,8 @@ const DISPLAY_COUNT: usize = 7;
 
 fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
     match message {
-        Message::ForceExit => {
-            iced::exit() // Only update can return the exit task
-        }
+        Message::IgnoreEvent => iced::Task::none(),
+
         Message::InputChanged(value) => {
             state.search_query = value;
             state.selected_index = 0;
@@ -160,23 +158,27 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
             state.current_filtered_apps = state.filtered_apps().into_iter().cloned().collect();
             iced::Task::none()
         }
-        Message::KeyPressed(key) => {
-            match key {
-                keyboard::Key::Named(keyboard::key::Named::Escape) => iced::exit(),
-                keyboard::Key::Named(keyboard::key::Named::Enter) => {
+
+        Message::KeyPressed(key, modifiers) => {
+            match (key, modifiers) {
+                (keyboard::Key::Named(keyboard::key::Named::Escape), _) => iced::exit(),
+
+                (keyboard::Key::Named(keyboard::key::Named::Enter), _) => {
                     if let Some(app) = state.current_filtered_apps.get(state.selected_index) {
                         launch_app(app);
                     }
                     iced::exit()
                 }
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+
+                (keyboard::Key::Named(keyboard::key::Named::ArrowDown), _) => {
                     if !state.current_filtered_apps.is_empty() {
                         let display_count = state.current_filtered_apps.len().min(DISPLAY_COUNT);
                         state.selected_index = (state.selected_index + 1) % display_count;
                     }
                     iced::Task::none()
                 }
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+
+                (keyboard::Key::Named(keyboard::key::Named::ArrowUp), _) => {
                     if !state.current_filtered_apps.is_empty() {
                         let display_count = state.current_filtered_apps.len().min(DISPLAY_COUNT);
                         state.selected_index = if state.selected_index == 0 {
@@ -187,8 +189,17 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
                     }
                     iced::Task::none()
                 }
-                keyboard::Key::Character(ref c) => {
-                    // Handle shortcuts first
+
+                (keyboard::Key::Named(keyboard::key::Named::Backspace), _) => {
+                    state.search_query.pop();
+                    state.selected_index = 0;
+                    state.current_filtered_apps.clear();
+                    state.current_filtered_apps =
+                        state.filtered_apps().into_iter().cloned().collect();
+                    iced::Task::none()
+                }
+
+                (keyboard::Key::Character(ref c), modifiers) if modifiers.logo() => {
                     if let Ok(num) = c.parse::<usize>()
                         && num >= 1
                         && num <= state.current_filtered_apps.len().min(DISPLAY_COUNT)
@@ -199,7 +210,13 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
                             return iced::exit();
                         }
                     }
-                    // For non-shortcut characters, treat as search input
+                    iced::Task::none()
+                }
+
+                // Regular character input (only when no modifiers)
+                (keyboard::Key::Character(ref c), modifiers)
+                    if !modifiers.logo() && !modifiers.control() && !modifiers.alt() =>
+                {
                     let mut new_search = state.search_query.clone();
                     new_search.push_str(c);
                     update(state, Message::InputChanged(new_search))
@@ -211,43 +228,38 @@ fn update(state: &mut AppState, message: Message) -> iced::Task<Message> {
 }
 
 fn subscription(_state: &AppState) -> iced::Subscription<Message> {
-    iced::Subscription::batch([
-        // Force capture Escape before any widget can handle it
-        iced::event::listen_with(|event, _status, _window| match event {
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                ..
-            }) => Some(Message::ForceExit),
-            _ => None,
-        }),
-        // Regular keyboard handling for other keys
-        iced::keyboard::on_key_press(|key, _modifiers| {
-            match key {
-                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => None, // Skip, handled above
-                _ => Some(Message::KeyPressed(key)),
-            }
-        }),
-    ])
+    iced::event::listen().map(|event| match event {
+        iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+            // logs for debug purposes
+            // logs::log_info(&format!(
+            //       "Global event - Key: {:?}, Modifiers: logo={}",
+            //       key,
+            //       modifiers.logo()
+            //   ));
+            Message::KeyPressed(key, modifiers)
+        }
+        _ => Message::IgnoreEvent,
+    })
 }
 
 fn view(state: &AppState) -> Element<'_, Message> {
-    let input = text_input("Type to search applications...", &state.search_query)
-        .on_input(Message::InputChanged)
-        .padding(Padding::from(12))
-        .size(24)
-        .style(|_, _| text_input::Style {
-            background: Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.96)),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            icon: Color::WHITE,
-            placeholder: Color::from_rgb(0.8, 0.8, 0.8),
-            value: Color::from_rgb(0.96, 0.96, 0.96),
-            selection: Color::from_rgb(0.3, 0.3, 0.8),
-        })
-        .width(Length::Fill);
+    let input = container(
+        text(&state.search_query)
+            .size(24)
+            .color(Color::from_rgb(0.96, 0.96, 0.96)),
+    )
+    .padding(Padding::from(12))
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.96))),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: iced::Shadow::default(),
+        text_color: None,
+    });
 
     let max_results = state.current_filtered_apps.len().min(DISPLAY_COUNT);
 
@@ -259,7 +271,7 @@ fn view(state: &AppState) -> Element<'_, Message> {
         .map(|(index, app)| {
             let is_selected = index == state.selected_index;
 
-            let icon = load_app_icon(app);
+            let icon = extract_app_icon(app);
             let icon_widget = image(icon).width(48).height(48);
 
             let app_name = text(&app.name)
@@ -269,7 +281,7 @@ fn view(state: &AppState) -> Element<'_, Message> {
             let shortcut_symbol = if cfg!(target_os = "macos") {
                 "⌘"
             } else {
-                "Win+"
+                "Logo+"
             };
             let shortcut = text(format!("{}{}", shortcut_symbol, index + 1))
                 .size(18)
@@ -357,88 +369,42 @@ fn view(state: &AppState) -> Element<'_, Message> {
         .into()
 }
 
-/// Simplified icon loading - uses the icon path resolved by the model or generates fallback
-fn load_app_icon(app: &App) -> iced::widget::image::Handle {
-    // Try to load the icon path that was resolved by the model
-    if let Some(icon_path) = &app.icon
-        && let Ok(handle) = load_icon_from_path(icon_path)
-    {
-        return handle;
-    }
+/// Launch an application using platform-specific methods
+pub fn launch_app(app: &AppInfo) {
+    logs::log_info(&format!("Launching: {}", app.name));
 
-    // Fallback to generated icon if no icon path or loading failed
-    generate_fallback_icon(&app.name)
-}
-
-/// Load icon from the path resolved by the model
-#[cfg(target_os = "macos")]
-fn load_icon_from_path(
-    icon_path: &str,
-) -> Result<iced::widget::image::Handle, Box<dyn std::error::Error>> {
-    use icns::{IconFamily, IconType};
-    use std::fs::File;
-
-    let file = File::open(icon_path)?;
-    let icon_family = IconFamily::read(file)?;
-
-    // Try multiple sizes in preference order
-    let icon_types = [
-        IconType::RGBA32_64x64,
-        IconType::RGBA32_32x32,
-        IconType::RGBA32_128x128,
-        IconType::RGBA32_16x16,
-    ];
-
-    for &icon_type in &icon_types {
-        if let Ok(image) = icon_family.get_icon_with_type(icon_type) {
-            let rgba_data = image.data();
-            let (width, height) = match icon_type {
-                IconType::RGBA32_16x16 => (16, 16),
-                IconType::RGBA32_32x32 => (32, 32),
-                IconType::RGBA32_64x64 => (64, 64),
-                IconType::RGBA32_128x128 => (128, 128),
-                _ => continue,
-            };
-
-            if let Ok(png_bytes) = rgba_to_png(rgba_data, width, height) {
-                return Ok(iced::widget::image::Handle::from_bytes(png_bytes));
-            }
+    let result = {
+        #[cfg(windows)]
+        {
+            Command::new("cmd")
+                .args(["/c", "start", ""])
+                .arg(&app.exe_path)
+                .spawn()
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open").arg(&app.exe_path).spawn()
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            Command::new(&app.exe_path).spawn()
+        }
+    };
+
+    if let Err(e) = result {
+        logs::log_error(&format!("Failed to launch {}: {}", app.name, e));
+    }
+}
+
+/// Extract icon and return iced handle
+fn extract_app_icon(app: &AppInfo) -> iced::widget::image::Handle {
+    if let Ok(Some(icon_data)) = apps::extract_icon(app) {
+        return iced::widget::image::Handle::from_bytes(icon_data);
     }
 
-    Err("No suitable icon size found".into())
-}
-
-#[cfg(target_os = "linux")]
-fn load_icon_from_path(
-    icon_path: &str,
-) -> Result<iced::widget::image::Handle, Box<dyn std::error::Error>> {
-    use std::fs;
-
-    let icon_data = fs::read(icon_path)?;
-    Ok(iced::widget::image::Handle::from_bytes(icon_data))
-}
-
-/// Helper function to convert RGBA data to PNG bytes
-#[cfg(target_os = "macos")]
-fn rgba_to_png(
-    rgba_data: &[u8],
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    use ::image::{ImageBuffer, Rgba, codecs::png::PngEncoder};
-
-    // Create image buffer from RGBA data
-    let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(width, height, rgba_data.to_vec())
-            .ok_or("Failed to create image buffer from RGBA data")?;
-
-    // Encode as PNG
-    let mut png_bytes = Vec::new();
-    let encoder = PngEncoder::new(&mut png_bytes);
-    img.write_with_encoder(encoder)?;
-
-    Ok(png_bytes)
+    generate_fallback_icon(&app.name)
 }
 
 /// Generate a deterministic fallback icon for apps without icons
@@ -483,21 +449,16 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn create_test_app(name: &str, path: &str) -> App {
-        App {
+    fn create_test_app(name: &str, path: &str) -> AppInfo {
+        AppInfo {
             name: name.to_string(),
-            path: PathBuf::from(path),
-            description: None,
-            icon: None,
+            exe_path: PathBuf::from(path),
+            icon_path: None,
         }
     }
 
-    fn create_test_state(apps: Vec<App>, query: &str) -> AppState {
-        let model = AppModel {
-            all_apps: apps,
-            ui_visible: false,
-        };
-        let mut state = AppState::new(model);
+    fn create_test_state(apps: Vec<AppInfo>, query: &str) -> AppState {
+        let mut state = AppState::new(apps);
         state.search_query = query.to_string();
         state
     }

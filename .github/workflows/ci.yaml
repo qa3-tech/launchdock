@@ -112,7 +112,21 @@ jobs:
           cd target/${{ matrix.target }}/release
           cp ../../../LICENSE .
           cp ../../../INSTALL .
-          tar -czf ../../../${{ matrix.name }} launchdock LICENSE INSTALL
+          
+          # Include Info.plist for macOS builds
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            cp ../../../Info.plist .
+            # Create a basic app bundle structure
+            mkdir -p LaunchDock.app/Contents/MacOS
+            mkdir -p LaunchDock.app/Contents/Resources
+            cp launchdock LaunchDock.app/Contents/MacOS/
+            cp ../../../Info.plist LaunchDock.app/Contents/
+            cp ../../../LICENSE LaunchDock.app/Contents/Resources/
+            cp ../../../INSTALL LaunchDock.app/Contents/Resources/
+            tar -czf ../../../${{ matrix.name }} LaunchDock.app LICENSE INSTALL Info.plist
+          else
+            tar -czf ../../../${{ matrix.name }} launchdock LICENSE INSTALL
+          fi
           cd -
 
       - name: Package binary (Windows)

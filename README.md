@@ -55,9 +55,9 @@ Set up your preferred keyboard shortcut in your OS hotkey settings to run: `laun
 
 **Suggested hotkey combinations:**
 
-- `Super+Space` (recommended)
+- `Super+Space`
 - `Ctrl+Alt+Space`
-- `Meta+Escape`
+- `Super+Escape`
 - Any combination that works for your workflow
 
 ### 3. Verify Setup

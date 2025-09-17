@@ -1,250 +1,296 @@
-use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    io::{Read, Write},
-    path::PathBuf,
-    process, thread,
-    time::Duration,
+use crate::logs;
+use std::env;
+use std::io::Read;
+use std::net::{TcpListener, TcpStream};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use crate::ipc::{
+    Command as IpcCommand, DAEMON_ADDR, Response, messages, pid_file_path, send_command,
+    send_response,
 };
 
-#[cfg(unix)]
-use std::os::unix::net::{UnixListener, UnixStream};
+// Public API functions that main.rs calls
 
-use crate::{
-    logs,
-    model::{AppModel, discover_apps},
-};
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum DaemonCommand {
-    Show,
-    Stop,
-    Status,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DaemonResponse {
-    pub success: bool,
-    pub error: Option<String>,
-    pub data: Option<DaemonResponseData>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum DaemonResponseData {
-    Status { running: bool, visible: bool },
-}
-
-impl DaemonResponse {
-  #[allow(dead_code)]  
-  pub fn ok() -> Self {
-        Self {
-            success: true,
-            error: None,
-            data: None,
-        }
+pub fn start() -> Result<(), String> {
+    if is_running() {
+        logs::log_info("Attempted to start daemon but already running");
+        return Err(messages::DAEMON_ALREADY_RUNNING.to_string());
     }
 
-    pub fn ok_with_data(data: DaemonResponseData) -> Self {
-        Self {
-            success: true,
-            error: None,
-            data: Some(data),
-        }
-    }
+    let exe = env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
 
-    pub fn error(message: String) -> Self {
-        Self {
-            success: false,
-            error: Some(message),
-            data: None,
-        }
+    Command::new(exe)
+        .arg("--daemon-mode")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to start daemon: {}", e))?;
+
+    // Wait for daemon to start
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    if is_running() {
+        logs::log_info("Daemon started successfully");
+        println!("{}", messages::DAEMON_STARTED);
+        Ok(())
+    } else {
+        logs::log_error("Failed to start daemon");
+        Err(messages::FAILED_TO_START.to_string())
     }
 }
 
-fn config_dir() -> PathBuf {
-    match std::env::consts::OS {
-        "windows" => {
-            let appdata = std::env::var("APPDATA").unwrap_or_else(|_| "C:\\".to_string());
-            PathBuf::from(appdata).join("LaunchDock")
+pub fn stop() -> Result<(), String> {
+    if !is_running() {
+        return Err(messages::DAEMON_NOT_RUNNING.to_string());
+    }
+
+    match send_command(IpcCommand::Stop) {
+        Ok(Response::Ok(msg)) => {
+            println!("{}", msg);
+            Ok(())
         }
-        "macos" => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            PathBuf::from(home).join("Library/Application Support/LaunchDock")
-        }
-        _ => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            PathBuf::from(home).join(".config/launchdock")
-        }
+        Ok(Response::Error(e)) => Err(e),
+        Ok(_) => Err(messages::INVALID_RESPONSE.to_string()),
+        Err(e) => Err(format!("{}: {}", messages::FAILED_TO_COMMUNICATE, e)),
     }
 }
 
-fn socket_path() -> PathBuf {
-    config_dir().join("launchdockd.sock")
+pub fn show() -> Result<(), String> {
+    if !is_running() {
+        return Err(messages::DAEMON_NOT_RUNNING.to_string());
+    }
+
+    match send_command(IpcCommand::Show) {
+        Ok(Response::Ok(msg)) => {
+            println!("{}", msg);
+            Ok(())
+        }
+        Ok(Response::Error(e)) => Err(e),
+        Ok(_) => Err(messages::INVALID_RESPONSE.to_string()),
+        Err(e) => Err(format!("{}: {}", messages::FAILED_TO_COMMUNICATE, e)),
+    }
 }
 
-fn pid_file() -> PathBuf {
-    config_dir().join("launchdockd.pid")
+pub fn status() -> Result<(), String> {
+    if !is_running() {
+        println!("Daemon: not running");
+        println!("UI: not visible");
+        return Ok(());
+    }
+
+    match send_command(IpcCommand::Status) {
+        Ok(Response::Status {
+            daemon_running,
+            ui_visible,
+        }) => {
+            println!(
+                "Daemon: {}",
+                if daemon_running {
+                    "running"
+                } else {
+                    "not running"
+                }
+            );
+            println!("UI: {}", if ui_visible { "visible" } else { "not visible" });
+            Ok(())
+        }
+        Ok(_) => Err(messages::INVALID_RESPONSE.to_string()),
+        Err(e) => Err(format!("{}: {}", messages::FAILED_TO_COMMUNICATE, e)),
+    }
 }
 
 pub fn is_running() -> bool {
-    let Ok(pid_str) = fs::read_to_string(pid_file()) else {
-        return false;
-    };
-
-    let Ok(pid) = pid_str.trim().parse::<u32>() else {
-        return false;
-    };
-
-    is_process_running(pid)
-}
-
-#[cfg(unix)]
-fn is_process_running(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
-pub fn send_command(cmd: DaemonCommand) -> Result<DaemonResponse, Box<dyn std::error::Error>> {
-    let mut stream = UnixStream::connect(socket_path())?;
-    let data = serde_json::to_vec(&cmd)?;
-
-    stream.write_all(&data)?;
-    stream.shutdown(std::net::Shutdown::Write)?;
-
-    let mut buffer = Vec::new();
-    stream.read_to_end(&mut buffer)?;
-
-    let response: DaemonResponse = serde_json::from_slice(&buffer)?;
-    Ok(response)
-}
-
-pub fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
-    fs::create_dir_all(config_dir())?;
-    fs::write(pid_file(), process::id().to_string())?;
-
-    // Remove old socket if it exists
-    let _ = fs::remove_file(socket_path());
-
-    let listener = UnixListener::bind(socket_path())?;
-    listener.set_nonblocking(true)?;
-
-    let mut model = AppModel {
-        all_apps: discover_apps(),
-        ui_visible: false,
-    };
-
-    // Channel for UI thread to signal when it's closed
-    let mut ui_thread_handle: Option<thread::JoinHandle<()>> = None;
-
-    logs::log_info(&format!(
-        "LaunchDock daemon started (PID: {})",
-        process::id()
-    ));
-    logs::log_info(&format!("Socket: {:?}", socket_path()));
-    logs::log_info("Daemon ready");
-
-    loop {
-        // Check for UI thread completion
-        if let Some(ref handle) = ui_thread_handle
-            && handle.is_finished()
-        {
-            model.ui_visible = false;
-            if let Some(handle) = ui_thread_handle.take() {
-                let _ = handle.join();
+    let pid_path = pid_file_path();
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid, 0) == 0
             }
-            logs::log_info("UI thread closed");
+            #[cfg(not(unix))]
+            true
+        } else {
+            false
         }
+    } else {
+        false
+    }
+}
 
-        // Check for incoming connections
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                let (response, should_stop) = handle_client_connection(&mut stream, &mut model);
+// Internal daemon implementation
 
-                let response_data = serde_json::to_vec(&response)?;
-                let _ = stream.write_all(&response_data);
+struct DaemonState {
+    ui_process: Option<Child>,
+    ui_visible: bool,
+}
 
-                if should_stop {
-                    break;
+enum Message {
+    ShowUI,
+    CheckStatus,
+    Shutdown,
+}
+
+impl DaemonState {
+    fn new() -> Self {
+        Self {
+            ui_process: None,
+            ui_visible: false,
+        }
+    }
+
+    fn update(&mut self, msg: Message) -> Response {
+        match msg {
+            Message::ShowUI => {
+                if self.ui_visible {
+                    Response::Ok(messages::UI_ALREADY_VISIBLE.to_string())
+                } else {
+                    self.launch_ui()
                 }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No connection available, sleep briefly
-                thread::sleep(Duration::from_millis(10));
-                continue;
+            Message::CheckStatus => Response::Status {
+                daemon_running: true,
+                ui_visible: self.ui_visible,
+            },
+            Message::Shutdown => {
+                if let Some(mut child) = self.ui_process.take() {
+                    let _ = child.kill();
+                }
+                Response::Ok(messages::DAEMON_STOPPING.to_string())
+            }
+        }
+    }
+
+    fn launch_ui(&mut self) -> Response {
+        let exe = match env::current_exe() {
+            Ok(path) => path,
+            Err(e) => return Response::Error(format!("Failed to get executable: {}", e)),
+        };
+
+        match Command::new(exe)
+            .arg("--ui-mode")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                logs::log_info("UI process launched");
+                self.ui_process = Some(child);
+                self.ui_visible = true;
+                Response::Ok(messages::UI_LAUNCHED.to_string())
             }
             Err(e) => {
-                logs::log_error(&format!("Accept error: {}", e));
-                break;
+                logs::log_error(&format!("Failed to launch UI: {}", e));
+                Response::Error(format!("Failed to launch UI: {}", e))
             }
         }
     }
 
-    cleanup();
-    Ok(())
-}
+    fn poll_ui_status(&mut self) {
+        // Direct state mutation is appropriate here since we're polling
+        // subprocess status, not handling user-triggered events
+        if let Some(ref mut child) = self.ui_process {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    logs::log_info(&format!("UI process exited with status: {}", status));
+                    self.ui_visible = false;
+                    self.ui_process = None;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    logs::log_error(&format!("Error checking UI process status: {}", e));
 
-fn handle_client_connection(
-    stream: &mut UnixStream,
-    model: &mut AppModel,
-) -> (DaemonResponse, bool) {
-    let mut buffer = vec![0; 1024];
-
-    let n = match stream.read(&mut buffer) {
-        Ok(n) => n,
-        Err(e) => {
-            return (
-                DaemonResponse::error(format!("Failed to read command: {}", e)),
-                false,
-            );
-        }
-    };
-
-    let cmd: DaemonCommand = match serde_json::from_slice(&buffer[..n]) {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            return (
-                DaemonResponse::error(format!("Invalid command format: {}", e)),
-                false,
-            );
-        }
-    };
-
-    match cmd {
-        DaemonCommand::Show => {
-            // At this point we know daemon is running and UI was not visible
-            model.ui_visible = true;
-
-            (
-                DaemonResponse::ok_with_data(DaemonResponseData::Status {
-                    running: true,
-                    visible: true,
-                }),
-                false,
-            )
-        }
-
-        DaemonCommand::Status => (
-            DaemonResponse::ok_with_data(DaemonResponseData::Status {
-                running: is_running(),
-                visible: model.ui_visible,
-            }),
-            false,
-        ),
-
-        DaemonCommand::Stop => {
-            logs::log_info("Stop requested");
-            (
-                DaemonResponse::ok_with_data(DaemonResponseData::Status {
-                    running: false,
-                    visible: false,
-                }),
-                true,
-            )
+                    self.ui_visible = false;
+                    self.ui_process = None;
+                }
+            }
         }
     }
 }
 
-fn cleanup() {
-    logs::log_info("Cleaning up...");
-    let _ = fs::remove_file(socket_path());
-    let _ = fs::remove_file(pid_file());
+fn handle_client(mut stream: TcpStream, state: Arc<Mutex<DaemonState>>) -> bool {
+    // Read single byte command
+    let mut cmd_byte = [0u8; 1];
+    if stream.read_exact(&mut cmd_byte).is_err() {
+        return false;
+    }
+
+    let Some(cmd) = IpcCommand::from_byte(cmd_byte[0]) else {
+        // Send error response for unknown command
+        let _ = send_response(&mut stream, &Response::Error("Unknown command".to_string()));
+        return false;
+    };
+
+    // Process command and generate response
+    let (response, should_exit) = {
+        let mut state = state.lock().unwrap();
+        state.poll_ui_status();
+
+        match cmd {
+            IpcCommand::Stop => {
+                logs::log_info("Received stop command");
+                let resp = state.update(Message::Shutdown);
+                (resp, true) // Signal to exit
+            }
+            IpcCommand::Show => {
+                logs::log_info("Received show command");
+                (state.update(Message::ShowUI), false)
+            }
+            IpcCommand::Status => (state.update(Message::CheckStatus), false),
+        }
+    };
+
+    // Send response
+    let _ = send_response(&mut stream, &response);
+
+    should_exit
+}
+
+pub fn run_daemon_process() {
+    logs::log_info("Daemon process starting");
+
+    // Write PID file
+    let pid_path = pid_file_path();
+    if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+        eprintln!("Failed to write PID file: {}", e);
+        return;
+    }
+
+    let state = Arc::new(Mutex::new(DaemonState::new()));
+
+    // Start UI status monitor thread
+    let monitor_state = Arc::clone(&state);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(std::time::Duration::from_secs(1));
+            let mut state = monitor_state.lock().unwrap();
+            state.poll_ui_status();
+        }
+    });
+
+    // Start TCP listener
+    let listener = match TcpListener::bind(DAEMON_ADDR) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind to {}: {}", DAEMON_ADDR, e);
+            let _ = std::fs::remove_file(&pid_path);
+            return;
+        }
+    };
+
+    // Main daemon loop
+    for stream in listener.incoming() {
+        if let Ok(stream) = stream
+            && handle_client(stream, Arc::clone(&state))
+        {
+            break; // Stop command received
+        }
+    }
+
+    // Cleanup
+    logs::log_info("Daemon process shutting down");
+    let _ = std::fs::remove_file(&pid_path);
 }

@@ -1,148 +1,91 @@
-use clap::{Parser, Subcommand};
-use std::process;
+use std::env;
 
+mod apps;
 mod daemon;
+mod ipc;
 mod logs;
-mod model;
-mod view;
+mod ui;
 
-#[derive(Parser)]
-#[command(name = "launchdock", about = "Cross-platform application launcher")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+const APP_NAME: &str = "launchdock";
+
+fn print_help() {
+    println!("Usage: daemon-app <command> [args]");
+    println!();
+    println!("Commands:");
+    println!("  start         Start the daemon");
+    println!("  stop          Stop the daemon");
+    println!("  show          Show the UI window");
+    println!("  status        Display daemon and UI status");
+    println!("  logs          Show recent log entries (default: 50 lines)");
+    println!("  logs <n>      Show last n log entries");
+    println!("  logs clear    Clear the log file");
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    Start,
-    Stop,
-    Show,
-    Status,
-    Logs {
-        #[command(subcommand)]
-        action: Option<logs::LogsAction>,
-    },
-}
+fn main() {
+    // Initialize logger at startup
+    if let Err(e) = logs::init_logger() {
+        eprintln!("Failed to initialize logger: {}", e);
+    }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    logs::init_logger()?;
+    let args: Vec<String> = env::args().collect();
 
-    let cli = Cli::parse();
+    // Check for hidden internal modes first
+    if args.len() == 2 && args[1] == "--daemon-mode" {
+        daemon::run_daemon_process();
+        return;
+    }
 
-    match cli.command {
-        Commands::Start => handle_start(),
-        Commands::Stop => send_daemon_command(daemon::DaemonCommand::Stop),
-        Commands::Show => handle_show(),
-        Commands::Status => send_daemon_command(daemon::DaemonCommand::Status),
-        Commands::Logs { action } => {
-            logs::handle_logs_command(action)?;
-            Ok(())
+    if args.len() == 2 && args[1] == "--ui-mode" {
+        let result = apps::discover_applications().and_then(|apps| {
+            logs::log_info(&format!("Found {} applications", apps.len()));
+            ui::run_ui(apps)
+        });
+
+        if let Err(e) = result {
+            logs::log_error(&format!("Application error: {}", e));
+            std::process::exit(1);
         }
-    }
-}
-
-fn handle_start() -> Result<(), Box<dyn std::error::Error>> {
-    // Check if we're the daemon process (spawned with null stdio)
-    if is_daemon_process() {
-        // We ARE the daemon - run it directly
-        return daemon::run_daemon();
+        return;
     }
 
-    // Check if daemon is already running
-    if daemon::is_running() {
-        println!("LaunchDock is already running");
-        return Ok(());
-    }
-
-    println!("Starting LaunchDock daemon...");
-
-    // Spawn daemon as separate process
-    let exe = std::env::current_exe()?;
-    let child = process::Command::new(exe)
-        .arg("start")
-        .stdin(process::Stdio::null())
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null())
-        .spawn()?;
-
-    println!("Daemon started with PID: {}", child.id());
-    Ok(())
-}
-
-fn send_daemon_command(cmd: daemon::DaemonCommand) -> Result<(), Box<dyn std::error::Error>> {
-    if !daemon::is_running() {
-        println!("LaunchDock is not running. Use 'launchdock start' to start it.");
-        return Ok(());
-    }
-
-    let response = daemon::send_command(cmd)?;
-
-    if !response.success
-        && let Some(error) = response.error
-    {
-        eprintln!("Error: {}", error);
-        return Err(error.into());
-    }
-
-    match response.data {
-        Some(daemon::DaemonResponseData::Status { running, visible }) => {
-            println!("Daemon: {}", if running { "Running" } else { "Stopped" });
-            println!("UI: {}", if visible { "Visible" } else { "Hidden" });
-        }
-        None => {
-            // Command acknowledged successfully
-        }
-    }
-
-    Ok(())
-}
-
-fn is_daemon_process() -> bool {
-    // Check if we're running with null stdio (daemon mode)
-    #[cfg(unix)]
-    {
-        // Check if stdin is a terminal
-        unsafe { libc::isatty(0) == 0 }
-    }
-}
-
-fn handle_show() -> Result<(), Box<dyn std::error::Error>> {
-    let status_response = daemon::send_command(daemon::DaemonCommand::Status);
-
-    match status_response {
-        Ok(response) if response.success => {
-            match response.data {
-                Some(daemon::DaemonResponseData::Status { visible: true, .. }) => {
-                    println!("UI is already visible");
-                    return Ok(());
+    // Handle public commands
+    let result = if args.len() < 2 {
+        print_help();
+        Ok(())
+    } else {
+        match args[1].as_str() {
+            "start" => daemon::start(),
+            "stop" => daemon::stop(),
+            "show" => daemon::show(),
+            "status" => daemon::status(),
+            "logs" => {
+                // Handle logs subcommands
+                if args.len() > 2 {
+                    match args[2].as_str() {
+                        "clear" => logs::clear_logs().map_err(|e| e.to_string()),
+                        n => {
+                            // Try to parse as number
+                            match n.parse::<usize>() {
+                                Ok(lines) => logs::show_logs(lines).map_err(|e| e.to_string()),
+                                Err(_) => Err(format!("Invalid logs argument: {}", n)),
+                            }
+                        }
+                    }
+                } else {
+                    // Default: show 50 lines
+                    logs::show_logs(50).map_err(|e| e.to_string())
                 }
-                Some(daemon::DaemonResponseData::Status { visible: false, .. }) => {
-                    // Continue - daemon running but UI not visible
-                }
-                _ => return Err("Unexpected daemon response".into()),
+            }
+            _ => {
+                eprintln!("Unknown command: {}", args[1]);
+                print_help();
+                Err("Invalid command".to_string())
             }
         }
-        _ => {
-            println!("LaunchDock is not running. Use 'launchdock start' to start it.");
-            return Ok(());
-        }
-    }
-
-    // This call is unnecessary but kept to maintain consistency with daemon command pattern
-    let show_response = daemon::send_command(daemon::DaemonCommand::Show)?;
-
-    let daemon::DaemonResponseData::Status { visible, .. } = show_response.data.unwrap();
-
-    logs::log_info("Starting UI process");
-    let mut model = model::AppModel {
-        all_apps: model::discover_apps(),
-        ui_visible: visible,
     };
 
-    let final_model = view::run_ui(model.clone())?;
-    model.ui_visible = final_model.ui_visible;
-
-    logs::log_info("UI process ended");
-    Ok(())
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }

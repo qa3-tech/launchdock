@@ -1,29 +1,14 @@
-use clap::Subcommand;
+use crate::APP_NAME;
 use std::fs::{File, metadata};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-#[derive(Subcommand)]
-pub enum LogsAction {
-    /// Show recent log entries
-    Show {
-        /// Number of lines to show
-        #[arg(short, long, default_value = "50")]
-        lines: usize,
-    },
-
-    /// Clear the log file
-    Clear,
-}
-
 pub fn init_logger() -> Result<(), Box<dyn std::error::Error>> {
     let log_file = get_log_file()?;
-
     // Create log directory if it doesn't exist
     if let Some(parent) = log_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
     Ok(())
 }
 
@@ -56,9 +41,10 @@ fn write_log(level: &str, msg: &str) {
         && size > 5 * 1024 * 1024
     {
         let warning = format!(
-            "[{}] WARN: Log file is {:.1} MiB. Consider running 'launchdock logs clear'\n",
+            "[{}] WARN: Log file is {:.1} MiB. Consider running '{} logs clear'\n",
             timestamp,
-            size as f64 / 1_048_576.0
+            size as f64 / 1_048_576.0,
+            APP_NAME
         );
         let _ = std::fs::OpenOptions::new()
             .create(true)
@@ -68,14 +54,7 @@ fn write_log(level: &str, msg: &str) {
     }
 }
 
-pub fn handle_logs_command(action: Option<LogsAction>) -> Result<(), Box<dyn std::error::Error>> {
-    match action.unwrap_or(LogsAction::Show { lines: 50 }) {
-        LogsAction::Show { lines } => show_logs(lines),
-        LogsAction::Clear => clear_logs(),
-    }
-}
-
-fn show_logs(lines: usize) -> Result<(), Box<dyn std::error::Error>> {
+pub fn show_logs(lines: usize) -> Result<(), Box<dyn std::error::Error>> {
     let log_file = get_log_file()?;
 
     if !log_file.exists() {
@@ -87,14 +66,14 @@ fn show_logs(lines: usize) -> Result<(), Box<dyn std::error::Error>> {
     let size = metadata(&log_file)?.len();
     if size > 5 * 1024 * 1024 {
         eprintln!(
-            "Warning: Log file is {:.1} MiB. Consider clearing it.",
-            size as f64 / 1_048_576.0
+            "Warning: Log file is {:.1} MiB. Consider clearing it with '{} logs clear'.",
+            size as f64 / 1_048_576.0,
+            APP_NAME
         );
     }
 
     let file = File::open(&log_file)?;
     let reader = BufReader::new(file);
-
     let all_lines: Vec<String> = reader.lines().collect::<Result<Vec<_>, _>>()?;
 
     let start = all_lines.len().saturating_sub(lines);
@@ -105,7 +84,7 @@ fn show_logs(lines: usize) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn clear_logs() -> Result<(), Box<dyn std::error::Error>> {
+pub fn clear_logs() -> Result<(), Box<dyn std::error::Error>> {
     let log_file = get_log_file()?;
 
     if log_file.exists() {
@@ -130,6 +109,6 @@ fn get_log_file() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .or_else(|_| std::env::var("HOME").map(|home| format!("{}/.local/share", home)))?;
 
     Ok(PathBuf::from(base)
-        .join("launchdock")
-        .join("launchdock.log"))
+        .join(APP_NAME)
+        .join(format!("{}.log", APP_NAME)))
 }
