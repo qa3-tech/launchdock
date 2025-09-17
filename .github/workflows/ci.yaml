@@ -50,9 +50,6 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: launchdock-linux-x86_64.tar.gz
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: launchdock-linux-aarch64.tar.gz
           - target: x86_64-apple-darwin
             os: macos-latest
             name: launchdock-macos-x86_64.tar.gz
@@ -84,17 +81,14 @@ jobs:
             target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cross (for Linux cross-compilation)
+      - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libgl1-mesa-dev
 
       - name: Build release binary
-        run: |
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Get binary name from Cargo.toml
         id: binary_name
