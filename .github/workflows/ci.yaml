@@ -62,12 +62,12 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             name: launchdock-macos-aarch64.tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            name: launchdock-windows-x86_64.zip
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            name: launchdock-windows-aarch64.zip
+          # - target: x86_64-pc-windows-msvc
+          #   os: windows-latest
+          #   name: launchdock-windows-x86_64.zip
+          # - target: aarch64-pc-windows-msvc
+          #   os: windows-latest
+          #   name: launchdock-windows-aarch64.zip
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -112,7 +112,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           cp ../../../LICENSE .
           cp ../../../INSTALL .
-          
+
           # Include Info.plist for macOS builds
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
             cp ../../../Info.plist .
@@ -129,14 +129,14 @@ jobs:
           fi
           cd -
 
-      - name: Package binary (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          cp ../../../LICENSE .
-          cp ../../../INSTALL .
-          7z a ../../../${{ matrix.name }} launchdock.exe LICENSE INSTALL
-          cd -
+      # - name: Package binary (Windows)
+      #   if: matrix.os == 'windows-latest'
+      #   run: |
+      #     cd target/${{ matrix.target }}/release
+      #     cp ../../../LICENSE .
+      #     cp ../../../INSTALL .
+      #     7z a ../../../${{ matrix.name }} launchdock.exe LICENSE INSTALL
+      #     cd -
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
