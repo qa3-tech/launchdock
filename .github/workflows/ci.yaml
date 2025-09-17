@@ -87,24 +87,36 @@ jobs:
             target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cross-compilation tools
+      - name: Install cross (for Linux cross-compilation)
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-          elif [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
-            sudo apt-get install -y musl-tools
-          fi
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build release binary
         run: |
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
           fi
-          cargo build --release --target ${{ matrix.target }}
+
+      - name: Get binary name from Cargo.toml
+        id: binary_name
+        run: |
+          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[] | select(.kind[] == "bin") | .name' | head -1)
+          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+
+      - name: Verify required files exist
+        run: |
+          for file in LICENSE INSTALL; do
+            if [ ! -f "$file" ]; then
+              echo "Error: Required file $file not found"
+              exit 1
+            fi
+          done
+          if [[ "${{ matrix.os }}" == "macos-latest" ]] && [ ! -f "Info.plist" ]; then
+            echo "Error: Required file Info.plist not found for macOS build"
+            exit 1
+          fi
 
       - name: Package binary (Unix)
         if: matrix.os != 'windows-latest'
@@ -119,13 +131,13 @@ jobs:
             # Create a basic app bundle structure
             mkdir -p LaunchDock.app/Contents/MacOS
             mkdir -p LaunchDock.app/Contents/Resources
-            cp launchdock LaunchDock.app/Contents/MacOS/
+            cp ${{ steps.binary_name.outputs.BINARY_NAME }} LaunchDock.app/Contents/MacOS/
             cp ../../../Info.plist LaunchDock.app/Contents/
             cp ../../../LICENSE LaunchDock.app/Contents/Resources/
             cp ../../../INSTALL LaunchDock.app/Contents/Resources/
-            tar -czf ../../../${{ matrix.name }} LaunchDock.app LICENSE INSTALL Info.plist
+            tar -czf ../../../${{ matrix.name }} LaunchDock.app
           else
-            tar -czf ../../../${{ matrix.name }} launchdock LICENSE INSTALL
+            tar -czf ../../../${{ matrix.name }} ${{ steps.binary_name.outputs.BINARY_NAME }} LICENSE INSTALL
           fi
           cd -
 
@@ -135,7 +147,7 @@ jobs:
       #     cd target/${{ matrix.target }}/release
       #     cp ../../../LICENSE .
       #     cp ../../../INSTALL .
-      #     7z a ../../../${{ matrix.name }} launchdock.exe LICENSE INSTALL
+      #     7z a ../../../${{ matrix.name }} ${{ steps.binary_name.outputs.BINARY_NAME }}.exe LICENSE INSTALL
       #     cd -
 
       - name: Upload artifact
