@@ -278,11 +278,22 @@ fn view(state: &AppState) -> Element<'_, Message> {
                 .size(24)
                 .color(Color::from_rgb(0.96, 0.96, 0.96));
 
-            let shortcut_symbol = if cfg!(target_os = "macos") {
-                "⌘"
-            } else {
-                "Logo+"
+            let shortcut_symbol = {
+                #[cfg(target_os = "macos")]
+                let symbol = "⌘";
+
+                #[cfg(target_os = "windows")]
+                let symbol = "⊞";
+
+                #[cfg(target_os = "linux")]
+                let symbol = "◆";
+
+                #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux",)))]
+                let symbol = "Logo+";
+
+                symbol
             };
+
             let shortcut = text(format!("{}{}", shortcut_symbol, index + 1))
                 .size(18)
                 .color(Color::from_rgb(0.8, 0.8, 0.8));

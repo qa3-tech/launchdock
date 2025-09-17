@@ -1,12 +1,26 @@
 use crate::apps::AppInfo;
-use freedesktop_desktop_entry::{DesktopEntry, Iter};
+use freedesktop_desktop_entry::{DesktopEntry, Iter, default_paths};
 use rs_apply::Apply;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
 pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
-    discover_desktop_entries().collect()
+    let mut unique_apps: HashMap<PathBuf, AppInfo> = HashMap::new();
+
+    for result in discover_desktop_entries() {
+        match result {
+            Ok(app) => {
+                // Only insert if we haven't seen this executable path before
+                // This preserves the first occurrence (highest priority)
+                unique_apps.entry(app.exe_path.clone()).or_insert(app);
+            }
+            Err(_) => continue, // Skip entries with errors
+        }
+    }
+
+    Ok(unique_apps.into_values().collect())
 }
 
 pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
@@ -18,34 +32,41 @@ pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
 }
 
 fn discover_desktop_entries() -> impl Iterator<Item = Result<AppInfo, Box<dyn Error>>> {
-    Iter::new_for_lang("en")
-        .filter_map(Result::ok)
-        .filter(is_application_entry)
-        .filter_map(|entry| parse_desktop_entry(&entry).transpose())
+    Iter::new(default_paths()).filter_map(|path| {
+        let content = fs::read_to_string(&path).ok()?;
+
+        if let Ok(entry) = DesktopEntry::decode(&path, &content) {
+            if is_application_entry(&entry) {
+                let name = entry
+                    .name(None)
+                    .map(|cow| cow.to_string())
+                    .unwrap_or_else(|| "Unknown Application".to_string());
+                let exec = entry.exec()?;
+                let icon = entry.icon();
+
+                let exe_path = match resolve_executable(exec) {
+                    Ok(path) => path,
+                    Err(e) => return Some(Err(e)),
+                };
+
+                let icon_path = icon.and_then(resolve_icon_path);
+
+                Some(Ok(AppInfo {
+                    name,
+                    exe_path,
+                    icon_path,
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
 }
 
 fn is_application_entry(entry: &DesktopEntry) -> bool {
-    entry.type_() == Some("Application")
-        && entry.no_display() != Some(true)
-        && entry.hidden() != Some(true)
-}
-
-fn parse_desktop_entry(entry: &DesktopEntry) -> Result<Option<AppInfo>, Box<dyn Error>> {
-    let name = entry.name(None).unwrap_or("Unknown Application").to_owned();
-    let exec = entry.exec().ok_or("No Exec field in desktop entry")?;
-
-    exec.apply(resolve_executable)?
-        .apply(|exe_path| {
-            let icon_path = entry.icon().and_then(resolve_icon_path);
-
-            AppInfo {
-                name,
-                exe_path,
-                icon_path,
-            }
-        })
-        .apply(Some)
-        .apply(Ok)
+    entry.name(None).is_some() && entry.exec().is_some() && !entry.no_display()
 }
 
 fn resolve_executable(exec: &str) -> Result<PathBuf, Box<dyn Error>> {
@@ -58,7 +79,6 @@ fn resolve_executable(exec: &str) -> Result<PathBuf, Box<dyn Error>> {
             if command.starts_with('/') {
                 return Ok(PathBuf::from(command));
             }
-
             std::env::var("PATH")?
                 .split(':')
                 .map(|dir| PathBuf::from(dir).join(command))
