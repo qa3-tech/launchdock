@@ -3,8 +3,8 @@ use freedesktop_desktop_entry::{DesktopEntry, Iter, default_paths};
 use rs_apply::Apply;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs;
 use std::path::PathBuf;
+use std::{env, fs};
 
 pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
     let mut unique_apps: HashMap<PathBuf, AppInfo> = HashMap::new();
@@ -89,35 +89,78 @@ fn resolve_executable(exec: &str) -> Result<PathBuf, Box<dyn Error>> {
 }
 
 fn resolve_icon_path(icon_name: &str) -> Option<PathBuf> {
+    // Handle absolute paths
     if icon_name.starts_with('/') {
         return PathBuf::from(icon_name).apply(|p| if p.exists() { Some(p) } else { None });
     }
 
-    ["/usr/share/icons", "/usr/share/pixmaps"]
-        .iter()
-        .copied()
-        .chain(
-            std::env::var("HOME")
-                .ok()
-                .as_ref()
-                .map(|home| {
-                    vec![
-                        format!("{}/.local/share/icons", home),
-                        format!("{}/.icons", home),
-                    ]
-                })
-                .unwrap_or_default()
-                .iter()
-                .map(String::as_str),
-        )
-        .flat_map(|base_dir| {
-            ["png", "svg", "xpm", "ico"].iter().flat_map(move |ext| {
-                [
-                    format!("{}/hicolor/48x48/apps/{}.{}", base_dir, icon_name, ext),
-                    format!("{}/{}.{}", base_dir, icon_name, ext),
-                ]
-            })
-        })
-        .map(PathBuf::from)
-        .find(|path| path.exists())
+    // Build base directories according to XDG specification
+    let mut base_dirs = Vec::new();
+
+    // System directories from XDG_DATA_DIRS (defaults to /usr/local/share:/usr/share)
+    env::var("XDG_DATA_DIRS")
+        .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string())
+        .split(':')
+        .filter(|dir| !dir.is_empty())
+        .for_each(|dir| base_dirs.push(format!("{}/icons", dir)));
+
+    // Legacy pixmaps directory
+    base_dirs.push("/usr/share/pixmaps".to_string());
+
+    // User directories
+    if let Ok(home) = env::var("HOME") {
+        // XDG_DATA_HOME or default to ~/.local/share
+        let data_home =
+            env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
+        base_dirs.push(format!("{}/icons", data_home));
+        base_dirs.push(format!("{}/.icons", home)); // Legacy
+    }
+
+    let extensions = ["png", "svg", "xpm"];
+
+    // Search in priority order for best performance
+    let searches = [
+        // Most common: hicolor theme, standard sizes, apps category
+        ("hicolor/48x48/apps", true),
+        ("hicolor/32x32/apps", true),
+        ("hicolor/24x24/apps", true),
+        ("hicolor/scalable/apps", true),
+        ("hicolor/16x16/apps", true),
+        // Other common categories at standard size
+        ("hicolor/48x48/places", true),
+        ("hicolor/48x48/actions", true),
+        ("hicolor/48x48/mimetypes", true),
+        // Direct lookups (for pixmaps and fallbacks)
+        ("", false), // Direct in base directory
+    ];
+
+    for base_dir in base_dirs {
+        let base_path = PathBuf::from(&base_dir);
+        if !base_path.exists() {
+            continue;
+        }
+
+        for (subpath, is_themed) in &searches {
+            // For pixmaps directory, only try direct lookup
+            if base_dir.ends_with("pixmaps") && *is_themed {
+                continue;
+            }
+
+            for ext in &extensions {
+                let path = if subpath.is_empty() {
+                    base_path.join(format!("{}.{}", icon_name, ext))
+                } else {
+                    base_path
+                        .join(subpath)
+                        .join(format!("{}.{}", icon_name, ext))
+                };
+
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
 }
