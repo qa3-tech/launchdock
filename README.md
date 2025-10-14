@@ -127,6 +127,7 @@ This means typing `psg` will find "Photoshop Graphics" before "Photo Studio Gall
 - Scans `/Applications/`, system apps, and user applications
 - Supports `.app` bundles with comprehensive icon discovery
 - Searches multiple icon naming patterns and formats
+- Includes system commands: Shutdown, Logout, Restart, Lock Screen
 
 ## Configuration
 
@@ -200,7 +201,18 @@ launchdock stop && launchdock start
 ### Platform-Specific
 
 **Linux**: Ensure desktop entries are properly installed
-**macOS**: Grant permissions in System Preferences → Security & Privacy if needed
+
+**macOS**:
+
+- Grant permissions in System Settings → Privacy & Security if needed
+- **Lock Screen Command**: The Lock Screen system command requires Accessibility permissions to work properly:
+  1. Try using Lock Screen from LaunchDock
+  2. macOS will prompt you to grant Accessibility permissions (or the command will fail silently)
+  3. Open **System Settings → Privacy & Security → Accessibility**
+  4. Find LaunchDock in the list and enable it (you may need to click the + button to add it manually)
+  5. You may need to restart LaunchDock: `launchdock stop && launchdock start`
+
+  **Note**: Shutdown and Restart commands will always prompt for your password as they require administrator privileges. This is a macOS security requirement.
 
 ## Architecture
 
@@ -235,9 +247,3 @@ This project uses a dual licensing model:
 Contact contact@qa3.tech for commercial licensing inquiries.
 
 See [LICENSE](LICENSE) for complete terms.
-
----
-
-**LaunchDock** - Launch applications faster, across all platforms.
-
-Copyright © 2025 QA3 Technologies LLC

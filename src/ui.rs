@@ -280,13 +280,13 @@ fn view(state: &AppState) -> Element<'_, Message> {
 
             let shortcut_symbol = {
                 #[cfg(target_os = "macos")]
-                let symbol = "⌘";
+                let symbol = "⌘ ";
 
                 #[cfg(target_os = "windows")]
-                let symbol = "⊞";
+                let symbol = "⊞ ";
 
                 #[cfg(target_os = "linux")]
-                let symbol = "◆";
+                let symbol = "◆ ";
 
                 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux",)))]
                 let symbol = "Logo+";
@@ -395,12 +395,30 @@ pub fn launch_app(app: &AppInfo) {
 
         #[cfg(target_os = "macos")]
         {
-            Command::new("open").arg(&app.exe_path).spawn()
+            let exe_path_str = app.exe_path.to_string_lossy();
+
+            match exe_path_str.as_ref() {
+                path if path.starts_with("osascript")
+                    || path.starts_with("pmset")
+                    || path.starts_with("/System/Library/CoreServices") =>
+                {
+                    Command::new("sh").arg("-c").arg(path).spawn()
+                }
+
+                _ => Command::new("open").arg(&app.exe_path).spawn(),
+            }
         }
 
         #[cfg(target_os = "linux")]
         {
-            Command::new(&app.exe_path).spawn()
+            let exe_string = app.exe_path.to_string_lossy();
+
+            match exe_string.as_ref() {
+                s if s.starts_with("systemctl") || s.starts_with("loginctl") => {
+                    Command::new("sh").arg("-c").arg(s).spawn()
+                }
+                _ => Command::new(&app.exe_path).spawn(),
+            }
         }
     };
 

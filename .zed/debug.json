@@ -22,5 +22,21 @@
     "program": "$ZED_WORKTREE_ROOT/target/debug/launchdock",
     "args": ["show"],
     "cwd": "$ZED_WORKTREE_ROOT/target/debug"
+  },
+  {
+    "label": "debug launchdock stop",
+    "request": "launch",
+    "adapter": "CodeLLDB",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/launchdock",
+    "args": ["stop"],
+    "cwd": "$ZED_WORKTREE_ROOT/target/debug"
+  },
+  {
+    "label": "debug launchdock logs",
+    "request": "launch",
+    "adapter": "CodeLLDB",
+    "program": "$ZED_WORKTREE_ROOT/target/debug/launchdock",
+    "args": ["logs"],
+    "cwd": "$ZED_WORKTREE_ROOT/target/debug"
   }
 ]

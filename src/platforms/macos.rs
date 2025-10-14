@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
-    discover_app_bundles().collect()
+    discover_app_bundles().chain(special_commands()).collect()
 }
 
 pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
@@ -40,10 +40,44 @@ pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         .transpose()
 }
 
+fn special_commands() -> impl Iterator<Item = Result<AppInfo, Box<dyn Error>>> {
+    const SYSTEM_ICON: &str =
+        "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarAdvanced.icns";
+
+    [
+       (
+           "Shutdown",
+           "osascript -e 'tell app \"System Events\" to shut down'",
+       ),
+       (
+           "Logout",
+           "osascript -e 'tell app \"System Events\" to log out'",
+       ),
+       (
+           "Restart",
+           "osascript -e 'tell app \"System Events\" to restart'",
+       ),
+       (
+           "Lock Screen",
+           "osascript -e 'tell application \"System Events\" to keystroke \"q\" using {command down, control down}'",
+       ),
+   ]
+    .into_iter()
+    .map(|(name, command)| {
+        Ok(AppInfo {
+            name: name.to_string(),
+            exe_path: PathBuf::from(command),
+            icon_path: Some(PathBuf::from(SYSTEM_ICON)),
+        })
+    })
+}
+
 fn app_directories() -> impl Iterator<Item = String> {
     [
         "/Applications".to_string(),
+        "/Applications/Utilities".to_string(),
         "/System/Applications".to_string(),
+        "/System/Applications/Utilities".to_string(),
     ]
     .into_iter()
     .chain(
@@ -134,6 +168,7 @@ fn get_icon_from_plist(
 fn find_icon_by_patterns(resources_dir: &std::path::Path, app_name: &str) -> Option<PathBuf> {
     let icon_patterns = [
         "AppIcon.icns".to_string(),
+        "appicon.icns".to_string(),
         format!("{}.icns", app_name),
         format!("{}.icns", app_name.to_lowercase()),
         "app.icns".to_string(),

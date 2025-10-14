@@ -6,7 +6,10 @@ use std::path::PathBuf;
 use winreg::{RegKey, enums::*};
 
 pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
-    registry_apps().chain(program_files_apps()).collect()
+    registry_apps()
+        .chain(program_files_apps())
+        .chain(special_commands())
+        .collect()
 }
 
 pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
@@ -15,6 +18,26 @@ pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         .filter(|path| path.exists())
         .map(|_| Vec::new()) // Placeholder - actual Windows icon extraction would go here
         .apply(Ok)
+}
+
+fn special_commands() -> impl Iterator<Item = Result<AppInfo, Box<dyn Error>>> {
+    const SYSTEM_ICON: &str = "C:\\Windows\\System32\\shell32.dll";
+
+    [
+        ("Shutdown", "shutdown /s /t 0"),
+        ("Logout", "shutdown /l"),
+        ("Restart", "shutdown /r /t 0"),
+        ("Sleep", "rundll32.exe powrprof.dll,SetSuspendState 0,1,0"),
+        ("Lock Screen", "rundll32.exe user32.dll,LockWorkStation"),
+    ]
+    .into_iter()
+    .map(|(name, command)| {
+        Ok(AppInfo {
+            name: name.to_string(),
+            exe_path: PathBuf::from(command),
+            icon_path: Some(PathBuf::from(SYSTEM_ICON)),
+        })
+    })
 }
 
 fn registry_apps() -> impl Iterator<Item = Result<AppInfo, Box<dyn Error>>> {
