@@ -1,7 +1,8 @@
 use crate::apps::AppInfo;
+use plist::Value;
 use rs_apply::Apply;
 use std::error::Error;
-use std::fs;
+use std::fs::{self, File};
 use std::path::PathBuf;
 
 pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
@@ -137,44 +138,38 @@ fn get_icon_from_plist(
     app_path: &std::path::Path,
     resources_dir: &std::path::Path,
 ) -> Option<PathBuf> {
-    use plist::Value;
-    use std::fs::File;
-
     let plist_path = app_path.join("Contents/Info.plist");
     let file = File::open(&plist_path).ok()?;
     let plist: Value = plist::from_reader(file).ok()?;
+    let dict = plist.as_dictionary()?;
 
-    // Extract CFBundleIconFile from the plist
-    let icon_name = plist
-        .as_dictionary()?
-        .get("CFBundleIconFile")?
-        .as_string()?;
-
-    // Add .icns extension if not present
-    let icon_filename = if icon_name.ends_with(".icns") {
-        icon_name.to_string()
-    } else {
-        format!("{}.icns", icon_name)
-    };
-
-    let icon_path = resources_dir.join(&icon_filename);
-    if icon_path.exists() {
-        Some(icon_path)
-    } else {
-        None
-    }
+    // Try CFBundleIconName first (modern), then CFBundleIconFile (legacy)
+    ["CFBundleIconName", "CFBundleIconFile"]
+        .iter()
+        .find_map(|&key| {
+            let icon_name = dict.get(key)?.as_string()?;
+            let icon_filename = if icon_name.ends_with(".icns") {
+                icon_name.to_string()
+            } else {
+                format!("{}.icns", icon_name)
+            };
+            let icon_path = resources_dir.join(&icon_filename);
+            icon_path.exists().then_some(icon_path)
+        })
 }
 
 fn find_icon_by_patterns(resources_dir: &std::path::Path, app_name: &str) -> Option<PathBuf> {
     let icon_patterns = [
+        // Try exact app name first
+        format!("{}.icns", app_name),
+        format!("{}.icns", capitalize_first_letter(app_name)),
+        format!("{}.icns", app_name.to_lowercase()),
+        format!("{}.icns", app_name.to_uppercase()),
+        // Generic patterns last
         "AppIcon.icns".to_string(),
         "appicon.icns".to_string(),
-        format!("{}.icns", app_name),
-        format!("{}.icns", app_name.to_lowercase()),
         "app.icns".to_string(),
         "icon.icns".to_string(),
-        format!("{}.icns", app_name.to_uppercase()),
-        format!("{}.icns", capitalize_first_letter(app_name)),
     ];
 
     // Try each pattern in priority order
