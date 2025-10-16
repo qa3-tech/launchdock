@@ -1,8 +1,10 @@
 use crate::apps::AppInfo;
+use icns::{IconFamily, IconType};
 use plist::Value;
 use rs_apply::Apply;
 use std::error::Error;
 use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
@@ -10,10 +12,6 @@ pub fn discover_applications() -> Result<Vec<AppInfo>, Box<dyn Error>> {
 }
 
 pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-    use icns::{IconFamily, IconType};
-    use std::fs::File;
-    use std::io::BufReader;
-
     app.icon_path
         .as_ref()
         .filter(|path| path.extension() == Some(std::ffi::OsStr::new("icns")))
@@ -23,10 +21,13 @@ pub fn extract_icon(app: &AppInfo) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
                 .apply(IconFamily::read)?
                 .apply(|icon_family| {
                     [
+                        IconType::RGBA32_256x256,
                         IconType::RGBA32_128x128,
                         IconType::RGBA32_64x64,
                         IconType::RGB24_48x48,
                         IconType::RGB24_32x32,
+                        // use as last resort as past this res UI performance slows
+                        IconType::RGBA32_512x512,
                     ]
                     .iter()
                     .find_map(|&icon_type| icon_family.get_icon_with_type(icon_type).ok())
@@ -102,36 +103,56 @@ fn parse_app_bundle(app_path: &std::path::Path) -> Result<Option<AppInfo>, Box<d
         return Ok(None);
     }
 
-    app_path
-        .file_stem()
+    // Extract just the app name from the bundle filename
+    let app_name = app_path
+        .file_name()
         .ok_or("Invalid app bundle name")?
         .to_string_lossy()
         .trim_end_matches(".app")
-        .to_owned()
-        .apply(|name| {
-            let exe_path = app_path.to_path_buf();
-            let icon_path = find_icns_icon(app_path, &name);
+        .to_owned();
 
-            AppInfo {
-                name,
-                exe_path,
-                icon_path,
-            }
-        })
-        .apply(Some)
-        .apply(Ok)
+    let exe_path = app_path.to_path_buf();
+    let icon_path = find_icns_icon(app_path, &app_name);
+
+    Ok(Some(AppInfo {
+        name: app_name,
+        exe_path: exe_path,
+        icon_path: icon_path,
+    }))
 }
 
 fn find_icns_icon(app_path: &std::path::Path, app_name: &str) -> Option<PathBuf> {
     let resources_dir = app_path.join("Contents/Resources");
 
-    // First, try to read the icon from Info.plist
-    if let Some(icon_path) = get_icon_from_plist(app_path, &resources_dir) {
-        return Some(icon_path);
-    }
-
-    // Fallback to pattern matching
+    // Try patterns first, then plist as last resort
     find_icon_by_patterns(&resources_dir, app_name)
+        .or_else(|| get_icon_from_plist(app_path, &resources_dir))
+}
+
+fn validate_icns_path(path: &PathBuf) -> bool {
+    path.exists()
+        && path.metadata().ok().map(|m| m.len() > 0).unwrap_or(false)
+        && File::open(path)
+            .ok()
+            .and_then(|f| IconFamily::read(BufReader::new(f)).ok())
+            .is_some()
+}
+
+fn find_icon_by_patterns(resources_dir: &std::path::Path, app_name: &str) -> Option<PathBuf> {
+    let icon_patterns = [
+        format!("{}.icns", app_name),
+        format!("{}.icns", app_name.to_lowercase()),
+        format!("{}.icns", app_name.to_uppercase()),
+        "AppIcon.icns".to_string(),
+        "appicon.icns".to_string(),
+        "app.icns".to_string(),
+        "icon.icns".to_string(),
+    ];
+
+    icon_patterns
+        .iter()
+        .map(|pattern| resources_dir.join(pattern))
+        .find(|path| path.exists() && validate_icns_path(path))
 }
 
 fn get_icon_from_plist(
@@ -143,7 +164,6 @@ fn get_icon_from_plist(
     let plist: Value = plist::from_reader(file).ok()?;
     let dict = plist.as_dictionary()?;
 
-    // Try CFBundleIconName first (modern), then CFBundleIconFile (legacy)
     ["CFBundleIconName", "CFBundleIconFile"]
         .iter()
         .find_map(|&key| {
@@ -154,42 +174,6 @@ fn get_icon_from_plist(
                 format!("{}.icns", icon_name)
             };
             let icon_path = resources_dir.join(&icon_filename);
-            icon_path.exists().then_some(icon_path)
+            validate_icns_path(&icon_path).then_some(icon_path)
         })
-}
-
-fn find_icon_by_patterns(resources_dir: &std::path::Path, app_name: &str) -> Option<PathBuf> {
-    let icon_patterns = [
-        // Try exact app name first
-        format!("{}.icns", app_name),
-        format!("{}.icns", capitalize_first_letter(app_name)),
-        format!("{}.icns", app_name.to_lowercase()),
-        format!("{}.icns", app_name.to_uppercase()),
-        // Generic patterns last
-        "AppIcon.icns".to_string(),
-        "appicon.icns".to_string(),
-        "app.icns".to_string(),
-        "icon.icns".to_string(),
-    ];
-
-    // Try each pattern in priority order
-    icon_patterns
-        .iter()
-        .map(|pattern| resources_dir.join(pattern))
-        .find(|path| path.exists())
-        .or_else(|| {
-            // Last resort: find any .icns file
-            std::fs::read_dir(resources_dir)
-                .ok()?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .find(|path| path.extension() == Some(std::ffi::OsStr::new("icns")))
-        })
-}
-
-fn capitalize_first_letter(s: &str) -> String {
-    s.chars()
-        .next()
-        .map(|first| first.to_uppercase().collect::<String>() + &s[1..])
-        .unwrap_or_default()
 }

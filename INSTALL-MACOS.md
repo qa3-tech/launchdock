@@ -8,13 +8,20 @@ Use the attached launchd plist file to have program run at startup. Update the p
 
 ```bash
 cp tech.qa3.launchdock.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/tech.qa3.launchdock.plist
+
+# Enable and load the service
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tech.qa3.launchdock.plist
+launchctl enable gui/$(id -u)/tech.qa3.launchdock
 ```
 
 ## Uninstall
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/tech.qa3.launchdock.plist
+# Disable and unload the service
+launchctl disable gui/$(id -u)/tech.qa3.launchdock
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/tech.qa3.launchdock.plist
+
+# Remove the plist
 rm ~/Library/LaunchAgents/tech.qa3.launchdock.plist
 ```
 
