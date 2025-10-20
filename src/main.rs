@@ -7,18 +7,24 @@ mod logs;
 mod ui;
 
 const APP_NAME: &str = "launchdock";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_help() {
-    println!("Usage: daemon-app <command> [args]");
+    println!("Usage: launchdock <command> [args]");
     println!();
     println!("Commands:");
     println!("  start         Start the daemon");
     println!("  stop          Stop the daemon");
     println!("  show          Show the UI window");
     println!("  status        Display daemon and UI status");
+    println!("  version       Show version information");
     println!("  logs          Show recent log entries (default: 50 lines)");
     println!("  logs <n>      Show last n log entries");
     println!("  logs clear    Clear the log file");
+}
+
+fn print_version() {
+    println!("{} {}", APP_NAME, VERSION);
 }
 
 fn main() {
@@ -58,6 +64,10 @@ fn main() {
             "stop" => daemon::stop(),
             "show" => daemon::show(),
             "status" => daemon::status(),
+            "version" => {
+                print_version();
+                Ok(())
+            }
             "logs" => {
                 // Handle logs subcommands
                 if args.len() > 2 {
