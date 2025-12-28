@@ -32,44 +32,6 @@ cargo install --path .
 
 Download the latest release for your platform from the [releases page](https://github.com/qa3-tech/launchdock/releases).
 
-## Setup
-
-### 1. Start the Daemon
-
-Add LaunchDock to your system startup so it runs automatically:
-
-```bash
-launchdock start
-```
-
-### 2. Configure Hotkeys
-
-Set up your preferred keyboard shortcut in your OS hotkey settings to run: `launchdock show`
-
-**Platform-specific instructions:**
-
-- **Windows**: Settings → System → Keyboard → Advanced keyboard settings → App shortcuts
-- **macOS**: System Preferences → Keyboard → Shortcuts → App Shortcuts
-- **Linux (GNOME)**: Settings → Keyboard → Custom Shortcuts
-- **Linux (KDE)**: System Settings → Shortcuts → Custom Shortcuts
-
-**Suggested hotkey combinations:**
-
-- `Super+Space`
-- `Ctrl+Alt+Space`
-- `Super+Escape`
-- Any combination that works for your workflow
-
-### 3. Verify Setup
-
-```bash
-# Check daemon status
-launchdock status
-
-# Test your configured hotkey
-# Should show the launcher interface
-```
-
 ## Usage
 
 ### Basic Commands
@@ -236,14 +198,3 @@ Contributions are welcome! Please see our dual licensing model below.
 5. Commit: `git commit -m 'Add amazing feature'`
 6. Push: `git push origin feature/amazing-feature`
 7. Open a Pull Request
-
-## License
-
-This project uses a dual licensing model:
-
-- **Open Source**: Licensed under GPL-3.0 for open source projects
-- **Commercial**: Separate commercial license required for proprietary use
-
-Contact contact@qa3.tech for commercial licensing inquiries.
-
-See [LICENSE](LICENSE) for complete terms.

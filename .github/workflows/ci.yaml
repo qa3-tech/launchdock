@@ -40,37 +40,25 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
-  build:
-    name: Build release binaries
+  build-linux:
+    name: Build Linux x86_64
     if: startsWith(github.ref, 'refs/tags/')
     needs: test
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: launchdock-linux-x86_64.tar.gz
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: launchdock-macos-x86_64.tar.gz
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            name: launchdock-macos-aarch64.tar.gz
-          # - target: x86_64-pc-windows-msvc
-          #   os: windows-latest
-          #   name: launchdock-windows-x86_64.zip
-          # - target: aarch64-pc-windows-msvc
-          #   os: windows-latest
-          #   name: launchdock-windows-aarch64.zip
-
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Update version in Cargo.toml
+        run: sed -i "s|0.0.0|${{ steps.version.outputs.VERSION }}|" Cargo.toml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-gnu
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -79,78 +67,209 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-x86_64-unknown-linux-gnu-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install system dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libgl1-mesa-dev
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target x86_64-unknown-linux-gnu
 
-      - name: Get binary name from Cargo.toml
+      - name: Get binary name
         id: binary_name
         run: |
           BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[] | select(.kind[] == "bin") | .name' | head -1)
           echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
 
-      - name: Verify required files exist
+      - name: Package binary
         run: |
-          for file in LICENSE INSTALL; do
-            if [ ! -f "$file" ]; then
-              echo "Error: Required file $file not found"
-              exit 1
-            fi
-          done
-          if [[ "${{ matrix.os }}" == "macos-latest" ]] && [ ! -f "Info.plist" ]; then
-            echo "Error: Required file Info.plist not found for macOS build"
-            exit 1
-          fi
-
-      - name: Package binary (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
+          cd target/x86_64-unknown-linux-gnu/release
           cp ../../../LICENSE .
           cp ../../../INSTALL .
-
-          # Include Info.plist for macOS builds
-          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            cp ../../../Info.plist .
-            # Create a basic app bundle structure
-            mkdir -p LaunchDock.app/Contents/MacOS
-            mkdir -p LaunchDock.app/Contents/Resources
-            cp ${{ steps.binary_name.outputs.BINARY_NAME }} LaunchDock.app/Contents/MacOS/
-            cp ../../../Info.plist LaunchDock.app/Contents/
-            cp ../../../LICENSE LaunchDock.app/Contents/Resources/
-            cp ../../../INSTALL LaunchDock.app/Contents/Resources/
-            tar -czf ../../../${{ matrix.name }} LaunchDock.app
-          else
-            tar -czf ../../../${{ matrix.name }} ${{ steps.binary_name.outputs.BINARY_NAME }} LICENSE INSTALL
-          fi
+          tar -czf ../../../launchdock-linux-x86_64.tar.gz ${{ steps.binary_name.outputs.BINARY_NAME }} LICENSE INSTALL
           cd -
-
-      # - name: Package binary (Windows)
-      #   if: matrix.os == 'windows-latest'
-      #   run: |
-      #     cd target/${{ matrix.target }}/release
-      #     cp ../../../LICENSE .
-      #     cp ../../../INSTALL .
-      #     7z a ../../../${{ matrix.name }} ${{ steps.binary_name.outputs.BINARY_NAME }}.exe LICENSE INSTALL
-      #     cd -
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+          name: launchdock-linux-x86_64.tar.gz
+          path: launchdock-linux-x86_64.tar.gz
+
+  build-macos-intel:
+    name: Build macOS Intel
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Update version in files
+        run: sed -i '' "s|0.0.0|${{ steps.version.outputs.VERSION }}|" Info.plist Cargo.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-x86_64-apple-darwin-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Get binary name
+        id: binary_name
+        run: |
+          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[] | select(.kind[] == "bin") | .name' | head -1)
+          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create app bundle
+        run: |
+          mkdir -p LaunchDock.app/Contents/MacOS
+          mkdir -p LaunchDock.app/Contents/Resources
+          cp target/x86_64-apple-darwin/release/${{ steps.binary_name.outputs.BINARY_NAME }} LaunchDock.app/Contents/MacOS/
+          cp launch.sh LaunchDock.app/Contents/MacOS/
+          chmod +x LaunchDock.app/Contents/MacOS/launch.sh
+          cp Info.plist LaunchDock.app/Contents/
+          cp LICENSE LaunchDock.app/Contents/Resources/
+          cp INSTALL LaunchDock.app/Contents/Resources/
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "LaunchDock" \
+            -srcfolder LaunchDock.app \
+            -ov -format UDZO \
+            LaunchDock-${{ steps.version.outputs.VERSION }}-intel.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaunchDock-${{ steps.version.outputs.VERSION }}-intel.dmg
+          path: LaunchDock-${{ steps.version.outputs.VERSION }}-intel.dmg
+
+  build-macos-arm:
+    name: Build macOS Apple Silicon
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Update version in files
+        run: sed -i '' "s|0.0.0|${{ steps.version.outputs.VERSION }}|" Info.plist Cargo.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-aarch64-apple-darwin-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Get binary name
+        id: binary_name
+        run: |
+          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[] | select(.kind[] == "bin") | .name' | head -1)
+          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create app bundle
+        run: |
+          mkdir -p LaunchDock.app/Contents/MacOS
+          mkdir -p LaunchDock.app/Contents/Resources
+          cp target/aarch64-apple-darwin/release/${{ steps.binary_name.outputs.BINARY_NAME }} LaunchDock.app/Contents/MacOS/
+          cp launch.sh LaunchDock.app/Contents/MacOS/
+          chmod +x LaunchDock.app/Contents/MacOS/launch.sh
+          cp Info.plist LaunchDock.app/Contents/
+          cp LICENSE LaunchDock.app/Contents/Resources/
+          cp INSTALL LaunchDock.app/Contents/Resources/
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "LaunchDock" \
+            -srcfolder LaunchDock.app \
+            -ov -format UDZO \
+            LaunchDock-${{ steps.version.outputs.VERSION }}-arm64.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaunchDock-${{ steps.version.outputs.VERSION }}-arm64.dmg
+          path: LaunchDock-${{ steps.version.outputs.VERSION }}-arm64.dmg
+
+  # build-windows-x86:
+  #   name: Build Windows x86_64
+  #   if: startsWith(github.ref, 'refs/tags/')
+  #   needs: test
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Install Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-pc-windows-msvc
+  #
+  #     - name: Cache cargo dependencies
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: |
+  #           ~/.cargo/registry
+  #           ~/.cargo/git
+  #           target
+  #         key: windows-x86_64-pc-windows-msvc-cargo-${{ hashFiles('**/Cargo.lock') }}
+  #
+  #     - name: Build release binary
+  #       run: cargo build --release --target x86_64-pc-windows-msvc
+  #
+  #     - name: Get binary name
+  #       id: binary_name
+  #       run: |
+  #         $BINARY_NAME = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].targets | Where-Object { $_.kind -contains "bin" } | Select-Object -First 1 -ExpandProperty name
+  #         echo "BINARY_NAME=$BINARY_NAME" >> $env:GITHUB_OUTPUT
+  #
+  #     - name: Package binary
+  #       run: |
+  #         cd target/x86_64-pc-windows-msvc/release
+  #         cp ../../../LICENSE .
+  #         cp ../../../INSTALL .
+  #         7z a ../../../launchdock-windows-x86_64.zip ${{ steps.binary_name.outputs.BINARY_NAME }}.exe LICENSE INSTALL
+  #         cd -
+  #
+  #     - name: Upload artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: launchdock-windows-x86_64.zip
+  #         path: launchdock-windows-x86_64.zip
 
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [test, build]
+    needs: [test, build-linux, build-macos-intel, build-macos-arm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -169,7 +288,7 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-assets/ \;
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.dmg" \) -exec cp {} release-assets/ \;
           ls -la release-assets/
 
       - name: Create Release
@@ -182,8 +301,15 @@ jobs:
 
             Download the appropriate binary for your platform below.
 
+            **macOS:**
+            - `.dmg` files for easy installation (drag to Applications folder)
+            - `intel` for Intel Macs, `arm64` for Apple Silicon
+
+            **Linux:**
+            - `.tar.gz` archive with binary and documentation
+
             Each archive contains:
-            - The LaunchDock binary
+            - The LaunchDock binary (or app bundle for macOS)
             - INSTALL file with setup instructions
             - LICENSE file with dual licensing terms
 

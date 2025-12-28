@@ -1,83 +1,277 @@
 LaunchDock Installation Instructions
 ====================================
 
+MACOS INSTALLATION
+==================
+
+1. INSTALL THE APPLICATION
+---------------------------
+
+1. Open the downloaded DMG file
+2. Drag LaunchDock.app to your Applications folder
+3. Eject the DMG
+
+2. FIRST LAUNCH
+---------------
+
+On first launch, macOS will show a security warning because the app is not signed:
+
+1. Right-click on LaunchDock.app in Applications
+2. Select "Open"
+3. Click "Open" in the dialog
+
+This only needs to be done once.
+
+3. ADD COMMAND LINE ACCESS (OPTIONAL)
+-------------------------------------
+
+To use launchdock commands from Terminal:
+
+    sudo ln -sf /Applications/LaunchDock.app/Contents/MacOS/launchdock /usr/local/bin/launchdock
+
+Verify installation:
+
+    launchdock status
+
+4. SET UP KEYBOARD SHORTCUT
+---------------------------
+
+METHOD 1: Shortcuts App (macOS Monterey 12.0+, Recommended)
+
+1. Open Shortcuts app (Spotlight: search "Shortcuts")
+2. Click + button (top right) to create new shortcut
+3. Search for and add action: "Open App"
+4. Click "App" and select LaunchDock
+5. Name your shortcut: "Launch LaunchDock" (top of editor)
+6. Right-click your new shortcut → "Shortcut Details" (or click ⓘ icon)
+7. Click "Add Keyboard Shortcut"
+8. Press your desired key combo (e.g., ⌘Space, ⌥Space)
+9. Click Done
+
+If the shortcut doesn't work, grant permissions:
+System Settings → Privacy & Security → Accessibility → Enable Shortcuts
+
+METHOD 2: Automator (Alternative)
+
+1. Open Automator → New Document → Quick Action
+2. Set Workflow receives: "no input" in "any application"
+3. Add action: Launch Application
+4. Select LaunchDock.app
+5. Save as: "Launch LaunchDock"
+6. System Settings → Keyboard → Keyboard Shortcuts → Services
+7. Find "Launch LaunchDock" and assign your hotkey
+
+Recommended hotkey combinations:
+- ⌘Space (Command + Space)
+- ⌥Space (Option + Space)
+- ^Space (Control + Space)
+
+5. ENABLE AUTO-START AT LOGIN (OPTIONAL)
+-----------------------------------------
+
+To start LaunchDock automatically when you log in:
+
+1. System Settings → General → Login Items
+2. Click + button under "Open at Login"
+3. Navigate to Applications and select LaunchDock.app
+4. Click Add
+
+6. COMMAND LINE OPTIONS
+-----------------------
+
+Once symlinked, you can use:
+
+    launchdock status    # Check daemon status
+    launchdock logs      # View logs
+    launchdock stop      # Stop daemon
+    launchdock start     # Start daemon
+    launchdock show      # Show UI
+
+7. UNINSTALL
+------------
+
+Remove symlink:
+    sudo rm /usr/local/bin/launchdock
+
+Remove app:
+    rm -rf /Applications/LaunchDock.app
+
+
+WINDOWS INSTALLATION
+====================
+
 1. EXTRACT AND INSTALL BINARY
 ------------------------------
 
-Extract the downloaded archive and copy the `launchdock` binary (or `launchdock.exe` 
-on Windows) to a directory in your system PATH.
+Extract the downloaded archive and copy launchdock.exe to a directory in your PATH.
 
 Common installation locations:
-- Linux/macOS: /usr/local/bin/ or ~/.local/bin/
-- Windows: C:\Program Files\LaunchDock\ (then add to PATH)
+- C:\Program Files\LaunchDock\
+- C:\Users\YourName\AppData\Local\Programs\LaunchDock\
 
-Alternative: Keep the binary anywhere and add its directory to your PATH.
+2. ADD TO PATH
+--------------
+
+1. Search for "Environment Variables" in Windows Search
+2. Click "Edit the system environment variables"
+3. Click "Environment Variables"
+4. Under "User variables", select "Path" and click "Edit"
+5. Click "New" and add the directory containing launchdock.exe
+6. Click OK on all dialogs
+
+3. START THE DAEMON
+-------------------
+
+Open Command Prompt or PowerShell and run:
+
+    launchdock start
+
+4. CONFIGURE STARTUP (RECOMMENDED)
+----------------------------------
+
+To run automatically at startup:
+
+METHOD 1: Task Scheduler
+
+1. Open Task Scheduler
+2. Create Basic Task
+3. Name: LaunchDock
+4. Trigger: When I log on
+5. Action: Start a program
+6. Program: C:\Path\To\launchdock.exe
+7. Arguments: start
+8. Finish
+
+METHOD 2: Startup Folder
+
+1. Press Win+R, type: shell:startup
+2. Create shortcut to launchdock.exe
+3. Right-click shortcut → Properties
+4. In "Target", add " start" after the path
+
+5. SET UP HOTKEYS
+-----------------
+
+Windows 11:
+1. Settings → Accessibility → Keyboard
+2. Enable "Use the Print Screen key to open screen capture"
+   OR use third-party tools like AutoHotkey or PowerToys
+
+PowerToys (Recommended):
+1. Install PowerToys from Microsoft Store
+2. Open PowerToys → Keyboard Manager → Remap a shortcut
+3. Set shortcut to run: launchdock show
+
+Suggested hotkey combinations:
+- Ctrl+Alt+Space
+- Win+Space
+
+
+LINUX INSTALLATION
+==================
+
+1. EXTRACT AND INSTALL BINARY
+------------------------------
+
+Extract the downloaded archive and copy the launchdock binary to a directory in your PATH.
+
+Common installation locations:
+- /usr/local/bin/ (system-wide, requires sudo)
+- ~/.local/bin/ (user-only)
+
+Example:
+
+    tar -xzf launchdock-linux.tar.gz
+    sudo cp launchdock /usr/local/bin/
+    sudo chmod +x /usr/local/bin/launchdock
 
 2. START THE DAEMON
 -------------------
 
-Open a terminal/command prompt and run:
+Open a terminal and run:
 
     launchdock start
-
-This starts the background daemon that manages application discovery.
 
 3. CONFIGURE STARTUP (RECOMMENDED)
 ----------------------------------
 
-Add `launchdock start` to your system startup to run automatically:
+Add to your desktop environment's autostart:
 
-- Windows: Add to Startup folder or Task Scheduler
-- macOS: Add to Login Items in System Preferences
-- Linux: Add to your desktop environment's autostart applications
+GNOME:
+1. Settings → Apps → Startup Applications
+2. Click Add
+3. Name: LaunchDock
+4. Command: launchdock start
+5. Click Add
+
+KDE Plasma:
+1. System Settings → Startup and Shutdown → Autostart
+2. Click Add → Add Application
+3. Select or type: launchdock start
+
+Systemd (alternative):
+Create ~/.config/systemd/user/launchdock.service:
+
+    [Unit]
+    Description=LaunchDock Daemon
+
+    [Service]
+    ExecStart=/usr/local/bin/launchdock start
+    Restart=on-failure
+
+    [Install]
+    WantedBy=default.target
+
+Enable:
+    systemctl --user enable launchdock
+    systemctl --user start launchdock
 
 4. SET UP HOTKEYS
 -----------------
 
-Configure a keyboard shortcut in your OS settings to run: launchdock show
+GNOME:
+1. Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts
+2. Click + to add
+3. Name: LaunchDock
+4. Command: launchdock show
+5. Set shortcut (e.g., Super+Space)
 
-Platform-specific instructions:
-- Windows: Settings → System → Keyboard → Advanced keyboard settings → App shortcuts
-- macOS: System Preferences → Keyboard → Shortcuts → App Shortcuts  
-- Linux (GNOME): Settings → Keyboard → Custom Shortcuts
-- Linux (KDE): System Settings → Shortcuts → Custom Shortcuts
+KDE Plasma:
+1. System Settings → Shortcuts → Custom Shortcuts
+2. Right-click → New → Global Shortcut → Command/URL
+3. Trigger tab: Set your hotkey
+4. Action tab: launchdock show
 
 Suggested hotkey combinations:
 - Super+Space (recommended)
 - Ctrl+Alt+Space
 - Meta+Escape
 
-5. VERIFY INSTALLATION
-----------------------
 
-Test your setup:
+USAGE
+=====
 
-    launchdock status
-
-Should show "Daemon: Running"
-
-Press your configured hotkey - the launcher interface should appear.
-
-6. USAGE
---------
-
-- Press your hotkey to show the launcher
+- Press your configured hotkey to show the launcher
 - Type to search for applications (fuzzy matching supported)
 - Use arrow keys or numbers (1-7) to select
 - Press Enter to launch, Escape to close
 
-7. TROUBLESHOOTING
-------------------
 
-If the daemon won't start:
+TROUBLESHOOTING
+===============
+
+Daemon won't start:
     launchdock logs
 
-If applications don't appear:
+Applications don't appear:
     launchdock stop && launchdock start
 
-For more help, see the project README or visit:
+Check daemon status:
+    launchdock status
+
+
+For more help, visit:
 https://github.com/qa3-tech/launchdock
 
 ====================================
 Copyright © 2025 QA3 Technologies LLC
-See LICENSE file for licensing terms.
