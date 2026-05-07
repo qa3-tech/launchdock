@@ -2,6 +2,10 @@
 
 A fast, cross-platform application launcher with fuzzy search that helps you quickly find and launch applications from anywhere on your system.
 
+<div align="center">
+  <img src="LaunchDock.png" alt="LaunchDock screenshot" width="600" />
+</div>
+
 ## Features
 
 - **Cross-Platform**: Works on Windows, Linux, and macOS
