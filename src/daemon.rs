@@ -1,10 +1,11 @@
 use crate::logs;
 use std::env;
 use std::io::Read;
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::ipc::{
     Command as IpcCommand, DAEMON_ADDR, Response, messages, pid_file_path, send_command,
@@ -29,10 +30,7 @@ pub fn start() -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to start daemon: {}", e))?;
 
-    // Wait for daemon to start
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    if is_running() {
+    if wait_until_running() {
         logs::log_info("Daemon started successfully");
         println!("{}", messages::DAEMON_STARTED);
         Ok(())
@@ -102,21 +100,36 @@ pub fn status() -> Result<(), String> {
     }
 }
 
+/// Fast single probe
+/// Used by the show/stop/status guards and start's "already running" check,
+/// all of which need a quick answer.
 pub fn is_running() -> bool {
-    let pid_path = pid_file_path();
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(pid, 0) == 0
-            }
-            #[cfg(not(unix))]
-            true
-        } else {
-            false
+    DAEMON_ADDR
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+        .map(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok())
+        .unwrap_or(false)
+}
+
+/// Wait for the daemon to become reachable, backing off exponentially
+/// up to a ~1s deadline. Used only to confirm startup after spawning.
+fn wait_until_running() -> bool {
+    // Liveness = the socket accepts a connection. A PID file can lie:
+    // it survives a crash, and PID reuse makes kill(pid, 0) a false
+    // positive. Probing the socket is the only signal that matches what
+    // show/status/stop actually need.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut delay = Duration::from_millis(10);
+    loop {
+        if is_running() {
+            return true;
         }
-    } else {
-        false
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(delay);
+        delay = (delay * 2).min(Duration::from_millis(250));
     }
 }
 
