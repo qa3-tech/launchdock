@@ -265,13 +265,6 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<DaemonState>>) -> bool 
 pub fn run_daemon_process() {
     logs::log_info("Daemon process starting");
 
-    // Write PID file
-    let pid_path = pid_file_path();
-    if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
-        eprintln!("Failed to write PID file: {}", e);
-        return;
-    }
-
     let state = Arc::new(Mutex::new(DaemonState::new()));
 
     // Start UI status monitor thread
@@ -284,15 +277,23 @@ pub fn run_daemon_process() {
         }
     });
 
-    // Start TCP listener
+    // Bind first — the socket is the real liveness signal, so nothing
+    // should advertise this daemon as "up" before it can accept.
     let listener = match TcpListener::bind(DAEMON_ADDR) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Failed to bind to {}: {}", DAEMON_ADDR, e);
-            let _ = std::fs::remove_file(&pid_path);
-            return;
+            return; // no PID file written yet; don't delete another instance's
         }
     };
+
+    // Now that we're listening, record the PID. This overwrites any stale
+    // file left by a prior crash. A write failure is non-fatal because the daemon
+    // serves fine without it
+    let pid_path = pid_file_path();
+    if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+        logs::log_error(&format!("Failed to write PID file: {}", e));
+    }
 
     // Main daemon loop
     for stream in listener.incoming() {
